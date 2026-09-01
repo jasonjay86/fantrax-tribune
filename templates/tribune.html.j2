@@ -126,8 +126,8 @@
       <tr class="rank-row {% if r.rank == 1 %}rank-row--top{% endif %} {% if r.rank >= rankings|length - 1 %}rank-row--bottom{% endif %}">
         <td class="col-rank">{{ r.rank }}</td>
         <td class="col-team">
-          {% if r.owner and r.owner.team_name %}
-            <strong>{{ r.owner.team_name }}</strong>
+          {% if r.owner and (r.owner.team_name or r.owner.display_name) %}
+            <strong>{{ r.owner.team_name or r.owner.display_name }}</strong>
           {% else %}
             <em>(no team name)</em>
           {% endif %}
