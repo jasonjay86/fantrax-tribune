@@ -63,7 +63,7 @@ def fetch_players_index(league_id: str, force: bool = False) -> dict:
     Fantrax returns an opteligiblePos map inside getLeagueInfo — but
     player IDs are Fantrax-internal and we need a name lookup.
     The public getPlayerIds endpoint returns sport=NFL players with name data.
-    Cache it like Sleeper's /players/nfl.
+    Cache it locally for 7 days.
     """
     if not force and PLAYERS_CACHE.exists():
         age_days = (time.time() - PLAYERS_CACHE.stat().st_mtime) / 86400
@@ -143,7 +143,7 @@ def fetch(league_id: str) -> dict:
         if s:
             players_index[pid] = s
 
-    # Flatten rosters into the same {team_id: [player, ...]} shape Sleeper uses,
+    # Flatten rosters into a {team_id: [player, ...]} shape for downstream use.
     # for downstream code reuse. Keep raw data under "rosters_raw" for now.
     rosters_flat = {}
     for team_id, team in rosters_raw.get("rosters", {}).items():
@@ -157,9 +157,8 @@ def fetch(league_id: str) -> dict:
             for item in team.get("rosterItems", [])
         ]
 
-    # Build a users list — Fantrax doesn't return a separate users endpoint
-    # like Sleeper does, so we derive it from the matchups/standings.
-    # The matchups list has teamName + teamId pairs.
+    # Build a users list — Fantrax doesn't expose a separate users endpoint,
+    # so we derive it from the matchups/standings.
     users = {}
     # Source 1: standings
     for entry in standings:

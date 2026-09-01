@@ -66,7 +66,7 @@ def main():
 
     from jinja2 import Template
     html = Template(INDEX_TEMPLATE).render(
-        title="The Keep The Change League Tribune",
+        title="The Fantrax Tribune",
         editions=editions,
     )
     out = root / "index.html"

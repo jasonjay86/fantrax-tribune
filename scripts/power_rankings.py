@@ -2,13 +2,12 @@
 power_rankings.py — compute Composite Power Score and Matchup of the Week
 for the Fantrax league.
 
-Adapted from the Sleeper Tribune version. Fantrax data shape differences:
-  - rosters is {team_id: [roster_items]}, not [{roster_id, settings, ...}]
-  - users list is derived (no separate endpoint), has team_name only
-  - standings endpoint gives current W/L/points_for per team
-  - No nfl_state equivalent; current week derived from scoringPeriods
-
-Scoring quirks accounted for in te_premium weight (config.json).
+Formula (per config.json weights):
+  PowerScore = w_win * W%
+             + w_pf  * (PFpg / league_avg_PFpg)
+             + w_sos * SoS_factor
+             + w_ap  * AllPlayW%
+         multiplied by te_premium_factor (TE premium 1.5/rec in this league)
 
 Usage: python power_rankings.py [--in data.json] [--out rankings.json]
 """
@@ -245,7 +244,8 @@ def compute_rankings(bundle: dict, weights: dict,
         r["power_score"] = 100 - ((top - r["raw_score"]) / spread) * 60
         r["rank"] = i + 1
 
-    # Matchup of the Week — same logic as Sleeper version, adapted for team_id
+    # Matchup of the Week — top-2 if they play each other this week; else
+    # top-ranked team vs. highest-ranked available opponent
     raw = bundle.get("_raw_league_info") or {}
     week_matchups = next((p for p in (raw.get("matchups") or []) if p.get("period") == week), None)
     week_pairs = []

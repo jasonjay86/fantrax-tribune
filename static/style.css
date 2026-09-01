@@ -1,5 +1,5 @@
 /* =============================================================
-   THE KEEP THE CHANGE LEAGUE TRIBUNE — broadsheet Sunday paper
+   THE FANTRAX TRIBUNE — broadsheet Sunday paper
    Color palette driven by CSS variables; matches config.json.
    ============================================================= */
 
@@ -363,6 +363,7 @@ html, body {
 }
 
 .col-rank   { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+.col-team   { }  /* flexes to fill remaining space — no fixed width */
 .col-record { width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
 .col-pf     { width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
 .col-score  { width: 70px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
