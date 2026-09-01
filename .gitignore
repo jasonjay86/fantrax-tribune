@@ -1,0 +1,16 @@
+# Build artifacts and cached data — not committed
+data.json
+rankings.json
+commentary.json
+preview.png
+cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+
+# Generated artifacts ARE committed (they ARE the site)
+# index.html
+# editions/*.html

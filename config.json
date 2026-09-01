@@ -1,0 +1,23 @@
+{
+  "league_id": "agjsij71msd7ufmw",
+  "site_title": "The Fantrax Tribune",
+  "tagline": "Est. 2026 — A Weekly Chronicle of Wins, Losses, and Family Group Chat Evidence",
+  "commissioner_handle": "bpkingofwakanda",
+  "accent_color": "#1f4068",
+  "newsprint_color": "#f4ecd8",
+  "ink_color": "#1a1a1a",
+  "llm": {
+    "provider": "openai-compatible",
+    "model": "MiniMax-M3",
+    "base_url": "https://api.minimax.io/anthropic/v1",
+    "max_tokens": 2200,
+    "personal_bits": 2
+  },
+  "weights": {
+    "win_pct": 0.35,
+    "pf_per_game": 0.20,
+    "strength_of_schedule": 0.20,
+    "all_play_win_pct": 0.15,
+    "te_premium": 0.10
+  }
+}

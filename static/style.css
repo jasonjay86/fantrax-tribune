@@ -1,0 +1,456 @@
+/* =============================================================
+   THE KEEP THE CHANGE LEAGUE TRIBUNE — broadsheet Sunday paper
+   Color palette driven by CSS variables; matches config.json.
+   ============================================================= */
+
+:root {
+  --newsprint: #f4ecd8;
+  --newsprint-shadow: #e8dcbf;
+  --ink: #1a1a1a;
+  --ink-faded: #5a5142;
+  --accent: #6e1a1a;
+  --rule: #2a2620;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #d9cfb8;
+  font-family: "Old Standard TT", "Georgia", serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.paper {
+  max-width: 920px;
+  margin: 32px auto 64px;
+  padding: 48px 56px 64px;
+  background: var(--newsprint);
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 27px,
+      rgba(120, 100, 60, 0.04) 27px,
+      rgba(120, 100, 60, 0.04) 28px
+    );
+  box-shadow:
+    0 1px 0 rgba(0,0,0,0.04),
+    0 24px 60px -20px rgba(0,0,0,0.35),
+    inset 0 0 80px rgba(120, 100, 60, 0.06);
+  border: 1px solid var(--newsprint-shadow);
+}
+
+/* ============ MASTHEAD ============ */
+
+.masthead { text-align: center; padding-bottom: 8px; }
+
+.edition-line {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: var(--ink-faded);
+  margin-bottom: 6px;
+}
+
+.title {
+  font-family: "Playfair Display", "Georgia", serif;
+  font-weight: 900;
+  font-size: clamp(40px, 7vw, 76px);
+  line-height: 0.95;
+  letter-spacing: -0.01em;
+  margin: 4px 0 6px;
+  color: var(--ink);
+  text-transform: none;
+}
+
+.subtitle {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 15px;
+  color: var(--ink-faded);
+  letter-spacing: 0.06em;
+  margin-bottom: 14px;
+}
+
+.rule { height: 0; border: 0; }
+.rule-single   { border-top: 1px solid var(--rule); margin: 18px 0; }
+.rule-double   { border-top: 3px double var(--rule); margin: 10px 0; }
+
+.meta-line {
+  font-family: "Old Standard TT", serif;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-faded);
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+/* ============ KICKER / SECTION HEADERS ============ */
+
+.kicker {
+  font-family: "Old Standard TT", serif;
+  font-size: 12px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--ink-faded);
+  margin: 8px 0 18px;
+}
+.kicker.accent { color: var(--accent); font-weight: 700; }
+
+/* ============ LEDE ============ */
+
+.lede { margin: 8px 0 24px; }
+.lede-headline {
+  font-family: "Playfair Display", serif;
+  font-weight: 900;
+  font-size: clamp(28px, 4.2vw, 42px);
+  line-height: 1.05;
+  margin: 6px 0 8px;
+  text-align: center;
+}
+.byline {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 12px;
+  text-align: center;
+  color: var(--ink-faded);
+  margin-bottom: 14px;
+  letter-spacing: 0.12em;
+}
+.deck {
+  font-family: "Playfair Display", serif;
+  font-style: italic;
+  font-size: 18px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--ink);
+  margin: 0 auto 18px;
+  max-width: 80%;
+}
+
+.drop-cap-wrap { columns: 2; column-gap: 28px; }
+.drop-cap::first-letter {
+  font-family: "UnifrakturMaguntia", "Playfair Display", serif;
+  font-size: 76px;
+  line-height: 0.85;
+  float: left;
+  padding: 6px 10px 0 0;
+  color: var(--accent);
+}
+.drop-cap {
+  font-family: "Old Standard TT", serif;
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: justify;
+  hyphens: auto;
+  margin: 0;
+}
+
+/* ============ MATCHUP OF THE WEEK ============ */
+
+.motw {
+  margin: 28px 0 12px;
+  padding: 18px 12px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  background: rgba(110, 26, 26, 0.04);
+}
+
+.matchup {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 18px;
+  align-items: center;
+  text-align: center;
+}
+
+.side { padding: 8px 6px; }
+.rank-badge {
+  display: inline-block;
+  font-family: "Playfair Display", serif;
+  font-weight: 900;
+  font-size: 28px;
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+  padding: 0 14px 4px;
+  margin-bottom: 8px;
+}
+.rank-badge .hash { font-weight: 700; opacity: 0.7; }
+.team-name {
+  font-family: "Playfair Display", serif;
+  font-weight: 700;
+  font-size: 22px;
+  margin: 6px 0 2px;
+}
+.owner-name {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-faded);
+  letter-spacing: 0.06em;
+}
+.record {
+  font-family: "Old Standard TT", serif;
+  font-size: 14px;
+  margin-top: 8px;
+  letter-spacing: 0.08em;
+}
+
+.key-players {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dotted rgba(42, 38, 32, 0.35);
+  text-align: left;
+}
+.key-label {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--ink-faded);
+  margin-bottom: 6px;
+}
+.player-chip {
+  font-family: "Old Standard TT", serif;
+  font-size: 13px;
+  line-height: 1.4;
+  margin-bottom: 4px;
+  color: var(--ink);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.player-pos {
+  display: inline-block;
+  font-family: "Playfair Display", serif;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  background: var(--accent);
+  color: var(--newsprint);
+  padding: 1px 5px;
+  min-width: 22px;
+  text-align: center;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.player-name {
+  font-weight: 700;
+}
+.player-team {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 11px;
+  color: var(--ink-faded);
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.vs { display: flex; flex-direction: column; align-items: center; }
+.versus {
+  font-family: "UnifrakturMaguntia", serif;
+  font-size: 48px;
+  color: var(--ink);
+  line-height: 1;
+}
+.status-pill {
+  font-family: "Old Standard TT", serif;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  padding: 3px 8px;
+  margin-top: 6px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.motw-blurb {
+  font-family: "Old Standard TT", serif;
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+  font-style: italic;
+  max-width: 80%;
+  margin: 14px auto 0;
+  color: var(--ink);
+}
+
+.tribune-pick {
+  margin: 22px auto 0;
+  padding: 14px 18px;
+  border-top: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  text-align: center;
+  max-width: 88%;
+  background: rgba(110, 26, 26, 0.04);
+}
+.pick-label {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.pick-line {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 12px;
+  font-family: "Playfair Display", serif;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.pick-team {
+  font-size: 22px;
+  color: var(--ink);
+}
+.pick-spread {
+  font-size: 32px;
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.pick-blurb {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin-top: 6px;
+  max-width: 70%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ============ POWER RANKINGS TABLE ============ */
+
+.rankings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Old Standard TT", serif;
+  font-size: 14px;
+  margin: 6px 0 14px;
+}
+
+.rankings-table thead th {
+  font-family: "Old Standard TT", serif;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faded);
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--rule);
+}
+
+.rankings-table tbody td {
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(42, 38, 32, 0.18);
+  vertical-align: baseline;
+}
+
+.col-rank   { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+.col-record { width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
+.col-pf     { width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+.col-score  { width: 70px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.rank-row--top    { background: rgba(110, 26, 26, 0.06); }
+.rank-row--top .col-rank { font-family: "Playfair Display", serif; font-weight: 900; color: var(--accent); }
+.rank-row--bottom { color: var(--ink-faded); }
+
+.section-blurb {
+  font-family: "Old Standard TT", serif;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+  margin: 12px auto 0;
+  max-width: 80%;
+}
+
+/* ============ BY THE NUMBERS ============ */
+
+.numbers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin: 4px 0 18px;
+}
+.number-card {
+  border: 1px solid var(--rule);
+  padding: 14px 10px;
+  text-align: center;
+  background: rgba(255, 250, 230, 0.4);
+}
+.number-value {
+  font-family: "Playfair Display", serif;
+  font-weight: 900;
+  font-size: 28px;
+  color: var(--accent);
+  line-height: 1;
+}
+.number-label {
+  font-family: "Old Standard TT", serif;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faded);
+  margin-top: 6px;
+}
+
+/* ============ CLOSING ============ */
+
+.closing-body {
+  font-family: "Old Standard TT", serif;
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+  max-width: 80%;
+  margin: 8px auto 18px;
+  font-style: italic;
+}
+
+/* ============ COLOPHON ============ */
+
+.colophon { text-align: center; margin-top: 8px; }
+.colophon p {
+  font-family: "Old Standard TT", serif;
+  font-size: 11px;
+  color: var(--ink-faded);
+  margin: 8px auto;
+  max-width: 80%;
+  line-height: 1.5;
+}
+.archive-note a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent);
+}
+
+/* ============ PRINT / NARROW ============ */
+
+@media (max-width: 700px) {
+  .paper { margin: 0; padding: 28px 20px 40px; box-shadow: none; border: none; }
+  .title { font-size: 36px; }
+  .drop-cap-wrap { columns: 1; }
+  .matchup { grid-template-columns: 1fr; }
+  .vs { padding: 8px 0; }
+}
+
+@media print {
+  body { background: #fff; }
+  .paper { box-shadow: none; margin: 0; max-width: none; }
+}

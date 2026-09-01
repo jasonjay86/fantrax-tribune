@@ -1,0 +1,130 @@
+{
+  "_comment": "Private commissioner-only notes for the Tribune's LLM. Do NOT publish as part of the league site. The Tribune may use these facts only in the warm-trash-talk voice for friends & family. Never invent facts that are not listed here. Treat every relationship as a confirmed fact, not an inference.",
+  "_hard_rules": [
+    "Tribune body copy must NEVER reference any owner's real first name.",
+    "Owners are referenced by Fantrax team_name or username ONLY.",
+    "Family members: father mojoh (DaMojoh); three children: jasonjay86 (Vitamin J), bpkingofwakanda (Gibbs me a break, commissioner), lilbigsister (BigLiLSiSterJohnson).",
+    "The fourth (eldest) sibling is not in the league — may be referenced as 'the eldest' or 'the missing brother' for color, never by first name.",
+    "Family bits should be warm, never cruel. The group chat energy is the joke, not anyone's feelings."
+  ],
+  "commissioner_handle": "bpkingofwakanda",
+  "commissioner_team": "Gibbs me a break",
+  "season_year": 2026,
+  "platform": "fantrax",
+
+  "members": {
+    "jasonjay86": {
+      "team_name": "Vitamin J",
+      "role": "Our team. The middle sibling. The J in Vitamin J stands for the first letter of his real name, which the Tribune must not use.",
+      "notes": "Tribe voice may favor Vitamin J slightly — this is the home broadsheet, after all. Keep it warm, not biased."
+    },
+    "bpkingofwakanda": {
+      "team_name": "Gibbs me a break",
+      "role": "The commissioner. The youngest of the three siblings in the league. Wakandan regalia, presumably a Detroit Lions RB named Gibbs in the lineup.",
+      "notes": "Family. Youngest-sibling energy: 'I run the league now and the older ones can't say anything about it.'"
+    },
+    "lilbigsister": {
+      "team_name": "BigLiLSiSterJohnson",
+      "role": "Our sister. The team name IS her handle — that's the whole bit. Plays the game her way.",
+      "notes": "Family. The team name is doing all the work; let it."
+    },
+    "mojoh": {
+      "team_name": "DaMojoh",
+      "role": "Our father. Named his team after himself. The man has range.",
+      "notes": "Family. 'The patriarch' energy. Father-of-three, fantasy commissioner zero, but always in the league anyway."
+    }
+  },
+
+  "family_dynamics": {
+    "in_league_siblings_oldest_to_youngest": ["lilbigsister", "jasonjay86", "bpkingofwakanda"],
+    "in_league_siblings_oldest_to_youngest_team_order": ["BigLiLSiSterJohnson", "Vitamin J", "Gibbs me a break"],
+    "father": "mojoh",
+    "father_team": "DaMojoh",
+    "eldest_sibling_not_in_league": "A fourth sibling exists but doesn't play — the missing one, the eldest. Safe to reference as 'the eldest' or 'the one who escaped' for color.",
+    "tone_guidance": "When family members play each other, the Tribune may lean into the family angle — keep it warm, never cruel. The commissioner (Gibbs me a break) being the youngest is its own joke. The father (DaMojoh) being managed by his kids is also its own joke."
+  },
+
+  "scoring_quirks": {
+    "_comment": "Verified from getLeagueInfo scoringConfig (2026-08-31).",
+    "first_downs": {
+      "pass": 0.25,
+      "rush": 0.5,
+      "reception": 0.5,
+      "comedy": "First downs are worth points. The commissioner rewards the chain gang."
+    },
+    "long_bombs": {
+      "completion_50_plus_yards_bonus": 1.0,
+      "passing_td_50_plus_yards_bonus": 3.0,
+      "comedy": "A 50+ yard passing TD is worth 7 points (4 base + 3 bonus). The deep ball is the lottery ticket."
+    },
+    "te_premium": {
+      "receptions": 1.5,
+      "standard_receptions": 1.0,
+      "comedy": "TEs get 1.5 per catch. Travis Kelce is a first-round pick in this league."
+    },
+    "standard": "PPR 1.0, 6/TD, -1 fumble, -2 INT, FG 3/4/5 by distance, DST PA tiers 15/10/5, K return TDs count 6"
+  },
+
+  "rivalries": [
+    {
+      "parties": ["Roundhouse", "TBD"],
+      "status": "budding",
+      "notes": "Jeffrey (commissioner) mentioned a 'budding rivalry' for Roundhouse. The other party is TBD. Watch and learn arc — bit will activate when the other team surfaces. Safe to tease Roundhouse as 'the owner with a budding rivalry they refuse to name.'"
+    }
+  ],
+
+  "voice_directives": {
+    "primary_influence": "John Madden — plainspoken, conversational, full of 'bang-bang', 'boom', 'here's a guy who...', tangents about football mechanics, affectionate confusion, occasional self-correction mid-sentence. Less sportswriter, more color commentator calling the game next to you on the couch.",
+    "length_budget": "Total of lede.body + motw_blurb + rankings_blurb + closing: ~330 words. (Hard ceiling 350.) Keep it tight.",
+    "what_to_cut": "No purple prose. No 1920s newspaper flourishes. No headline puns in body copy. Speak like Madden: short sentences, choppy rhythm, the occasional half-thought.",
+    "what_to_keep": "Warmth, family dynamics, scoring-quirk in-jokes. The Tribune is a love letter — just spoken out loud."
+  },
+
+  "personal_bits_pool": {
+    "_comment": "Curated pool of one-liner personal touches. Each edition, the Tribune randomly picks 1-2 of these (relevance-boosted toward the actual matchup). The model gets them as seasoning, not the meal — football is always the focus. Each bit is intentionally self-contained so the LLM can drop it in without needing extra context.",
+    "_format": "{ handles: [...team_names this bit applies to], text: 'one-sentence observation' }",
+    "_notes": "Keep these SHORT (under 25 words each). Make them warm, never mean. Avoid repeating the same bit every week — random selection handles variety.",
+    "bits": [
+      {
+        "handles": ["jasonjay86", "bpkingofwakanda", "lilbigsister"],
+        "text": "Three siblings in the same league — the family group chat has been arguing about trades since August."
+      },
+      {
+        "handles": ["mojoh", "jasonjay86", "bpkingofwakanda", "lilbigsister"],
+        "text": "DaMojoh plays his kids every year and has never once asked for a trade freeze."
+      },
+      {
+        "handles": ["bpkingofwakanda"],
+        "text": "The youngest sibling is the commissioner. The other two will hear about every schedule imbalance."
+      },
+      {
+        "handles": ["lilbigsister"],
+        "text": "BigLiLSiSterJohnson — the team name is doing all the marketing work this league needs."
+      },
+      {
+        "handles": ["mojoh"],
+        "text": "DaMojoh named his team after himself. The man has a brand."
+      },
+      {
+        "handles": ["jasonjay86", "bpkingofwakanda"],
+        "text": "Two brothers, one league, zero agreement on the schedule."
+      },
+      {
+        "handles": ["mojoh"],
+        "text": "The patriarch is managing a fantasy empire while his kids manage his lineup. Family business."
+      },
+      {
+        "handles": ["Roundhouse"],
+        "text": "Roundhouse has a budding rivalry with someone — the commissioner dropped it once and refuses to elaborate."
+      },
+      {
+        "handles": ["lilbigsister", "jasonjay86", "bpkingofwakanda"],
+        "text": "The fourth sibling is not in the league. Probably wise. The eldest escaped."
+      },
+      {
+        "handles": ["mojoh", "jasonjay86"],
+        "text": "Father-and-son fantasy matchups are a tradition no one asked for and everyone enjoys."
+      }
+    ]
+  }
+}

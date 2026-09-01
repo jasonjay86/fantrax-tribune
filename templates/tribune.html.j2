@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ site_title }} — Week {{ week }} Edition</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Old+Standard+TT:ital,wght@0,400;0,700;1,400&family=UnifrakturMaguntia&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ path_prefix }}static/style.css">
+</head>
+<body>
+<div class="paper">
+
+<header class="masthead">
+  <div class="edition-line">Vol. {{ season }} · No. {{ issue }} · {{ season_type|capitalize }} Season Edition · Week {{ week }}</div>
+  <h1 class="title">{{ site_title }}</h1>
+  <div class="subtitle">{{ tagline }}</div>
+  <div class="rule rule-double"></div>
+  <div class="meta-line">
+    <span>Established {{ season }}</span>
+    <span>·</span>
+    <span>Published Each Tuesday</span>
+    <span>·</span>
+    <span>One Cent</span>
+    <span>·</span>
+    <span>Pennies Spent on Insult</span>
+  </div>
+  <div class="rule rule-double"></div>
+</header>
+
+<!-- ===== ABOVE THE FOLD ===== -->
+<section class="above-fold">
+  {% if lede %}
+  <div class="kicker">── Above The Fold ──</div>
+  <article class="lede">
+    <h2 class="lede-headline">{{ lede.headline }}</h2>
+    <div class="byline">By The Tribune Sports Desk</div>
+    {% if lede.deck %}<p class="deck">{{ lede.deck }}</p>{% endif %}
+    <div class="drop-cap-wrap">
+      <p class="drop-cap">{{ lede.body }}</p>
+    </div>
+  </article>
+  {% endif %}
+
+  {% if matchup_of_week %}
+  <aside class="motw">
+    <div class="kicker accent">── Matchup of the Week ──</div>
+    <div class="matchup">
+      <div class="side">
+        <div class="rank-badge">{% if matchup_of_week.team_a.rank %}<span class="hash">#</span>{{ matchup_of_week.team_a.rank }}{% else %}—{% endif %}</div>
+        <div class="team-name">{{ matchup_of_week.team_a.team or matchup_of_week.team_a.name }}</div>
+        <div class="owner-name">{{ matchup_of_week.team_a.name }}</div>
+        <div class="record">Record: {{ matchup_of_week.team_a.record }}</div>
+        {% if matchup_of_week.team_a.key_players %}
+        <div class="key-players">
+          <div class="key-label">Watch</div>
+          {% for p in matchup_of_week.team_a.key_players %}
+          <div class="player-chip">
+            <span class="player-pos">{{ p.position }}</span>
+            <span class="player-name">{{ p.name }}</span>
+            <span class="player-team">{{ p.team }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="vs">
+        <div class="versus">vs.</div>
+        {% if matchup_of_week.status == 'preview' %}
+          <div class="status-pill">PREVIEW</div>
+        {% endif %}
+      </div>
+      <div class="side">
+        <div class="rank-badge">{% if matchup_of_week.team_b.rank %}<span class="hash">#</span>{{ matchup_of_week.team_b.rank }}{% else %}—{% endif %}</div>
+        <div class="team-name">{{ matchup_of_week.team_b.team or matchup_of_week.team_b.name }}</div>
+        <div class="owner-name">{{ matchup_of_week.team_b.name }}</div>
+        <div class="record">Record: {{ matchup_of_week.team_b.record }}</div>
+        {% if matchup_of_week.team_b.key_players %}
+        <div class="key-players">
+          <div class="key-label">Watch</div>
+          {% for p in matchup_of_week.team_b.key_players %}
+          <div class="player-chip">
+            <span class="player-pos">{{ p.position }}</span>
+            <span class="player-name">{{ p.name }}</span>
+            <span class="player-team">{{ p.team }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% if motw_blurb %}<p class="motw-blurb">{{ motw_blurb }}</p>{% endif %}
+
+    {% if pick and pick.favorite and pick.favorite != "—" and pick.spread is not none %}
+    <div class="tribune-pick">
+      <div class="pick-label">── Tribune Pick ──</div>
+      <div class="pick-line">
+        <span class="pick-team">{{ pick.favorite }}</span>
+        <span class="pick-spread">{% if pick.spread < 0 %}{{ pick.spread }}{% elif pick.spread > 0 %}+{{ pick.spread }}{% else %}PK{% endif %}</span>
+      </div>
+      {% if pick.blurb %}<p class="pick-blurb">{{ pick.blurb }}</p>{% endif %}
+    </div>
+    {% endif %}
+  </aside>
+  {% endif %}
+</section>
+
+<div class="rule rule-single"></div>
+
+<!-- ===== POWER RANKINGS ===== -->
+<section class="rankings">
+  <div class="kicker">── The Power Rankings ──</div>
+  <table class="rankings-table">
+    <thead>
+      <tr>
+        <th class="col-rank">#</th>
+        <th class="col-team">Team</th>
+        <th class="col-owner">Owner</th>
+        <th class="col-record">Record</th>
+        <th class="col-pf">PF</th>
+        <th class="col-score">Power</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rankings %}
+      <tr class="rank-row {% if r.rank == 1 %}rank-row--top{% endif %} {% if r.rank >= rankings|length - 1 %}rank-row--bottom{% endif %}">
+        <td class="col-rank">{{ r.rank }}</td>
+        <td class="col-team">
+          {% if r.owner and r.owner.team_name %}
+            <strong>{{ r.owner.team_name }}</strong>
+          {% else %}
+            <em>(no team name)</em>
+          {% endif %}
+        </td>
+        <td class="col-owner">{{ r.owner.display_name if r.owner else '?' }}</td>
+        <td class="col-record">{{ r.wins }}-{{ r.losses }}{% if r.ties %}-{{ r.ties }}{% endif %}</td>
+        <td class="col-pf">{{ "%.1f"|format(r.points_for) }}</td>
+        <td class="col-score">{{ "%.1f"|format(r.power_score) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if rankings_blurb %}<p class="section-blurb">{{ rankings_blurb }}</p>{% endif %}
+</section>
+
+<div class="rule rule-single"></div>
+
+<!-- ===== BY THE NUMBERS ===== -->
+<section class="numbers">
+  <div class="kicker">── By The Numbers ──</div>
+  <div class="numbers-grid">
+    {% for n in by_the_numbers %}
+      <div class="number-card">
+        <div class="number-value">{{ n.value }}</div>
+        <div class="number-label">{{ n.label }}</div>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+<div class="rule rule-single"></div>
+
+<!-- ===== CLOSING NOTES ===== -->
+{% if closing %}
+<section class="closing">
+  <div class="kicker">── Final Whistle ──</div>
+  <p class="closing-body">{{ closing }}</p>
+</section>
+{% endif %}
+
+<footer class="colophon">
+  <div class="rule rule-double"></div>
+  <p>
+    The Keep The Change League Tribune is published weekly by the Tribune Sports Desk
+    on commission of the league office. Computed by sleight-of-hand mathematics
+    (40% record, 25% points-for, 20% strength of schedule, 15% all-play record).
+    Commentary generated by a small, well-paid language model. Printed on the internet.
+  </p>
+  <p class="archive-note">
+    <a href="{{ path_prefix }}editions/index.html">Past Editions</a> ·
+    Generated {{ generated_at }} · Week {{ week }}, {{ season_type|capitalize }} Season, {{ season }}
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
