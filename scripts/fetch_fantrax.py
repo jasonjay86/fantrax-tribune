@@ -93,9 +93,13 @@ def slim_player(player: dict) -> dict:
 
 def fetch_sleeper_projections(season: int = 2026, week: int = 1) -> dict:
     """
-    Fetch Sleeper's weekly projections and return a (name_norm, team) -> pts_half_ppr
-    lookup so we can match Fantrax players (whose IDs don't map to Sleeper's)
-    to projection data by name + NFL team.
+    Fetch Sleeper's weekly projections and return a tuple of two lookups
+    so we can match Fantrax players (whose IDs don't map to Sleeper's)
+    to projection data AND career metadata by name + NFL team.
+
+    Returns (projection_lookup, meta_lookup) where:
+    - projection_lookup: {(last, first|TEAM) or (first last|TEAM): pts_half_ppr}
+    - meta_lookup:       {(last, first|TEAM): {"years_exp": int, "age": int, ...}}
 
     The endpoint is public: https://api.sleeper.app/v1/projections/nfl/regular/{season}/{week}
     """
@@ -106,7 +110,7 @@ def fetch_sleeper_projections(season: int = 2026, week: int = 1) -> dict:
             data = json.loads(r.read())
     except Exception as e:
         print(f"[fetch_fantrax] WARN: sleeper projections fetch failed ({e})", file=sys.stderr)
-        return {}
+        return {}, {}
 
     # Build a name+team -> half-PPR projection lookup
     # Sleeper projection keys are player IDs; the projection dict doesn't include
@@ -120,6 +124,7 @@ def fetch_sleeper_projections(season: int = 2026, week: int = 1) -> dict:
         players_db = {}
 
     lookup = {}
+    meta_lookup = {}
     for pid, proj in data.items():
         if not isinstance(proj, dict):
             continue
@@ -138,8 +143,19 @@ def fetch_sleeper_projections(season: int = 2026, week: int = 1) -> dict:
         key_fs  = f"{first} {last}|{team}"
         lookup.setdefault(key_csv, pts)
         lookup.setdefault(key_fs, pts)
+        # Capture career metadata for the LLM prompt guard. years_exp == 0
+        # means rookie; years_exp >= 1 means experienced. Use the CSV key as
+        # the canonical form so the lookup matches Fantrax's "Last, First".
+        meta = {}
+        if isinstance(pinfo.get("years_exp"), int):
+            meta["years_exp"] = pinfo["years_exp"]
+        if isinstance(pinfo.get("age"), (int, float)):
+            meta["age"] = int(pinfo["age"])
+        if meta:
+            meta_lookup[key_csv] = meta
+            meta_lookup[key_fs] = meta
     print(f"[fetch_fantrax] built projection lookup for {len(lookup)} player/team combos", file=sys.stderr)
-    return lookup
+    return lookup, meta_lookup
 
 
 def normalize_name_for_lookup(name: str) -> str:
@@ -162,23 +178,62 @@ def projected_points_for_fantrax_team(team_roster: list, projection_lookup: dict
     we compute total projections for the full roster as a rough estimate —
     the spread comparison is what matters, and both sides use the same heuristic.
     """
+    return sum(
+        (pts for pts in (
+            lookup_player_projection(slot, projection_lookup)
+            for slot in (team_roster or [])
+            if is_active_starter(slot)
+        ) if pts),
+        0.0,
+    )
+
+
+def is_active_starter(slot: dict) -> bool:
+    """True if a roster slot should count toward projections / key-players ranking."""
+    status = slot.get("status")
+    if status and status not in ("ACTIVE", "Active", None):
+        return False
+    player = slot.get("player") or {}
+    if not player.get("name") or not player.get("team"):
+        return False
+    return True
+
+
+def lookup_player_projection(slot: dict, projection_lookup: dict) -> float:
+    """Return the projected half-PPR points for a single roster slot, or 0."""
     if not projection_lookup:
         return 0.0
-    total = 0.0
+    player = slot.get("player") or {}
+    name = player.get("name") or ""
+    team = (player.get("team") or "").upper()
+    if not name or not team:
+        return 0.0
+    key = f"{normalize_name_for_lookup(name)}|{team}"
+    pts = projection_lookup.get(key)
+    return float(pts) if pts else 0.0
+
+
+def per_starter_projections(team_roster: list, projection_lookup: dict) -> dict[str, float]:
+    """
+    Per-starter projected points for a Fantrax team. Returns
+    {fantrax_player_id: projected_points} for every ACTIVE slot that has a
+    matching projection. Used by power_rankings.pick_key_players to rank
+    starters by projected points (instead of by position, which always
+    surfaces QB + RB1).
+    """
+    out: dict[str, float] = {}
+    if not projection_lookup:
+        return out
     for slot in team_roster or []:
-        if slot.get("status") and slot["status"] not in ("ACTIVE", "Active", None):
+        if not is_active_starter(slot):
             continue
-        player = slot.get("player") or {}
-        name = player.get("name") or ""
-        team = (player.get("team") or "").upper()
-        if not name or not team:
+        pid = slot.get("player_id")
+        if not pid:
             continue
-        # Fantrax format "Last, First" → match "last, first|TEAM"
-        key = f"{normalize_name_for_lookup(name)}|{team}"
-        pts = projection_lookup.get(key)
-        if pts:
-            total += float(pts)
-    return round(total, 2)
+        pts = lookup_player_projection(slot, projection_lookup)
+        if pts > 0:
+            out[pid] = round(pts, 2)
+    return out
 
 
 def fetch(league_id: str) -> dict:
@@ -192,6 +247,12 @@ def fetch(league_id: str) -> dict:
 
     print(f"[fetch_fantrax] pulling standings...", file=sys.stderr)
     standings = _get(f"/getStandings?leagueId={league_id}")
+
+    # Projected points — pull Sleeper's weekly projections early so we can
+    # use the meta_lookup to enrich players_index with career metadata
+    # (years_exp, age) before the index is built.
+    season_year = league_info.get("seasonYear") or 2026
+    projection_lookup, meta_lookup = fetch_sleeper_projections(season=season_year, week=1)
 
     # Resolve player IDs → slim index, only for players actually on rosters.
     # Fantrax IDs are like "04mnz" for players, "20090" for DST/team-offense.
@@ -222,6 +283,38 @@ def fetch(league_id: str) -> dict:
         s = resolve(pid)
         if s:
             players_index[pid] = s
+
+    # Enrich players_index with career metadata (years_exp, age) from Sleeper's
+    # players DB. Match by (last, first|TEAM) since Fantrax IDs don't map to
+    # Sleeper IDs. This lets the LLM prompt guard against player-fact
+    # hallucinations (e.g. "Don't call a player a rookie unless years_exp==0").
+    if meta_lookup:
+        enriched = 0
+        for pid, info in players_index.items():
+            name = info.get("name") or ""
+            team = (info.get("team") or "").upper()
+            if not name or not team:
+                continue
+            # Fantrax stores names as "Last, First"; reverse to match lookup key
+            if "," in name:
+                parts = [p.strip().lower() for p in name.split(",", 1)]
+                if len(parts) == 2:
+                    key = f"{parts[0]}, {parts[1]}|{team}"
+                else:
+                    continue
+            else:
+                # Fallback: "First Last"
+                parts = name.lower().split()
+                if len(parts) >= 2:
+                    key = f"{parts[0]} {parts[-1]}|{team}"
+                else:
+                    continue
+            meta = meta_lookup.get(key)
+            if meta:
+                info["years_exp"] = meta.get("years_exp")
+                info["age"] = meta.get("age")
+                enriched += 1
+        print(f"[fetch_fantrax] enriched {enriched}/{len(players_index)} players with career metadata", file=sys.stderr)
 
     # Flatten rosters into a {team_id: [player, ...]} shape for downstream use.
     # for downstream code reuse. Keep raw data under "rosters_raw" for now.
@@ -264,15 +357,16 @@ def fetch(league_id: str) -> dict:
                         "handle": None,
                     }
 
-    # Projected points — pull Sleeper's weekly projections and join by name+team.
-    # Fantrax doesn't expose its own projection API publicly, so we use Sleeper's
-    # as a proxy. The scoring format we use (half-PPR) is close to typical
-    # Fantrax defaults; the *spread* comparison is what matters, not exact points.
-    season_year = league_info.get("seasonYear") or 2026
-    projection_lookup = fetch_sleeper_projections(season=season_year, week=1)
+    # Per-team projected points AND per-starter projection map (for the MOTW
+    # key_players selector in power_rankings.py — sort starters by projected
+    # points instead of position order, so the LLM highlights the actual
+    # top scorers). projection_lookup was already built above for player
+    # metadata enrichment.
     team_projected = {}
+    team_starter_projections = {}  # tid -> {fantrax_player_id: projected_points}
     for tid, roster in rosters_flat.items():
         team_projected[tid] = projected_points_for_fantrax_team(roster, projection_lookup)
+        team_starter_projections[tid] = per_starter_projections(roster, projection_lookup)
 
     # Attach projected_points + spread to every matchup in matchups[0]
     matchups_with_proj = []
@@ -318,6 +412,10 @@ def fetch(league_id: str) -> dict:
         "week": 1,  # Updated by power_rankings; default to 1 (preseason snapshot)
         "projections_available": bool(projection_lookup),
         "scoring_format": "half_ppr_proxy",
+        # Per-starter projections keyed by team_id -> {player_id: pts}. Used
+        # by power_rankings.pick_key_players to surface actual top scorers
+        # (not always QB+RB1 by position order).
+        "team_starter_projections": team_starter_projections,
         # Raw league_info retained for reference; not used by downstream code yet
         "_raw_league_info": league_info,
     }

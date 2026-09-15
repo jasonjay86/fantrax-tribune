@@ -133,22 +133,47 @@ def te_premium_factor(rosters_flat: dict, team_id: str, players_index: dict) -> 
     return {0: 0.97, 1: 1.0, 2: 1.03}.get(min(te_count, 2), 1.03)
 
 
-def pick_key_players(roster: list, players_index: dict, n: int = 2) -> list[dict]:
+def pick_key_players(roster: list, players_index: dict, n: int = 2,
+                      starter_projections: dict[str, float] | None = None) -> list[dict]:
     """
-    Choose up to N ACTIVE players from a Fantrax roster. Order priority:
-    QB first, then RB, then WR/TE. Resolved via players_index.
+    Choose up to N ACTIVE players from a Fantrax roster.
+
+    Strategy:
+    - If `starter_projections` is provided (dict {player_id: projected_points}),
+      rank active players by projected points and take the top N. This surfaces
+      the actual top scorers (e.g., a hot WR3 over a mediocre QB1) instead of
+      always returning QB + RB1 by position order.
+    - Otherwise, fall back to position priority (QB → RB → WR/TE → ...) which
+      is the previous behavior.
     """
     pos_priority = {"QB": 0, "RB": 1, "WR": 2, "TE": 3, "RWT": 4, "K": 5, "DST": 6}
     active = [it for it in (roster or []) if it.get("status") == "ACTIVE"]
-    active.sort(key=lambda it: pos_priority.get(it.get("position", "?"), 99))
+    if starter_projections:
+        # Sort by projected points desc; tiebreak by position priority
+        # then by player_id so the order is deterministic.
+        indexed = list(enumerate(active))
+        indexed.sort(
+            key=lambda ix: (
+                -float(starter_projections.get(ix[1].get("player_id"), 0.0)),
+                pos_priority.get(ix[1].get("position", "?"), 99),
+                ix[1].get("player_id", ""),
+            )
+        )
+        chosen = [it for _, it in indexed[:n]]
+    else:
+        active.sort(key=lambda it: pos_priority.get(it.get("position", "?"), 99))
+        chosen = active[:n]
     out = []
-    for item in active[:n]:
+    for item in chosen:
         pid = item.get("player_id")
         info = players_index.get(pid) or item.get("player") or {}
         out.append({
-            "name":     info.get("name") or pid,
-            "position": item.get("position"),
-            "team":     info.get("team") or "FA",
+            "name":          info.get("name") or pid,
+            "position":      item.get("position"),
+            "team":          info.get("team") or "FA",
+            "projected_pts": starter_projections.get(pid) if starter_projections else None,
+            "years_exp":     info.get("years_exp"),  # 0 = rookie, 1+ = experienced
+            "age":           info.get("age"),
         })
     return out
 
@@ -159,6 +184,7 @@ def compute_rankings(bundle: dict, weights: dict,
     rosters_flat = bundle.get("rosters") or {}
     standings = bundle.get("standings") or []
     players_index = bundle.get("players_index") or {}
+    team_starter_projections = bundle.get("team_starter_projections") or {}
 
     user_map = build_user_map(users, generic_names=generic_names)
     enriched = standings_to_enriched(standings, user_map, list(rosters_flat.keys()))
@@ -207,7 +233,10 @@ def compute_rankings(bundle: dict, weights: dict,
                             "rank":   0,
                             "score":  50.0,
                             "record": "0-0",
-                            "key_players": pick_key_players(rosters_flat.get(tid, []), players_index, n=2),
+                            "key_players": pick_key_players(
+                                rosters_flat.get(tid, []), players_index, n=2,
+                                starter_projections=team_starter_projections.get(tid),
+                            ),
                         }
                         if isinstance(proj, (int, float)):
                             side["projected_points"] = round(proj, 2)
@@ -314,7 +343,10 @@ def compute_rankings(bundle: dict, weights: dict,
             "rank":   team_row["rank"],
             "score":  team_row["power_score"],
             "record": f"{team_row['wins']}-{team_row['losses']}" + (f"-{team_row['ties']}" if team_row['ties'] else ""),
-            "key_players": pick_key_players(rosters_flat.get(tid, []), players_index, n=2),
+            "key_players": pick_key_players(
+                rosters_flat.get(tid, []), players_index, n=2,
+                starter_projections=team_starter_projections.get(tid),
+            ),
         }
         if isinstance(proj, (int, float)):
             side["projected_points"] = round(proj, 2)

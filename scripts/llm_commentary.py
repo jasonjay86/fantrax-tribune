@@ -94,6 +94,12 @@ FACTS — sparingly, only as seasoning:
     - You've already used the bit's angle in another section
     - Forcing it would make the section longer, not better
 - Do NOT invent facts. If it's not in the data, don't mention it.
+- Player facts are EXTRA STRICT — the data only gives you name/position/team.
+  Don't claim a player is a "rookie", "veteran", "second-year", "former MVP",
+  "Heisman winner", or anything about their career unless it's literally in
+  the data you were given. If `years_exp` is in the data, you may say
+  "rookie" only when years_exp == 0. Otherwise just talk about the player
+  by name and what they're projected to do this week — no career history.
 - Refer to owners by their Fantrax team_name or username ONLY.
 
 OUTPUT — strict JSON, exact shape:
