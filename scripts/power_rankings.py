@@ -185,25 +185,46 @@ def compute_rankings(bundle: dict, weights: dict,
                 a = by_team.get(a_id) if a_id else None
                 b = by_team.get(b_id) if b_id else None
                 if a and b:
+                    # Build via the same helper that attaches projected spread.
+                    # Inline motw_team_side here because it's defined later in
+                    # the function body (Python closure can't see it from the
+                    # early-return path otherwise).
+                    def _side(team_row, tid):
+                        proj = None
+                        matchups_with_proj = bundle.get("matchups") or []
+                        period_matchups = next((p for p in matchups_with_proj if p.get("period") == week), None)
+                        if period_matchups:
+                            for m in period_matchups.get("matchupList", []):
+                                if m.get("away", {}).get("id") == tid:
+                                    proj = m.get("away_projected_points")
+                                    break
+                                if m.get("home", {}).get("id") == tid:
+                                    proj = m.get("home_projected_points")
+                                    break
+                        side = {
+                            "name":   team_row["owner"].get("display_name", "?"),
+                            "team":   team_row["owner"].get("team_name", ""),
+                            "rank":   0,
+                            "score":  50.0,
+                            "record": "0-0",
+                            "key_players": pick_key_players(rosters_flat.get(tid, []), players_index, n=2),
+                        }
+                        if isinstance(proj, (int, float)):
+                            side["projected_points"] = round(proj, 2)
+                        return side
+                    a_side = _side(a, a_id)
+                    b_side = _side(b, b_id)
                     preview_motw = {
                         "status": "preview",
-                        "team_a": {
-                            "name": a["owner"].get("display_name", "?"),
-                            "team":  a["owner"].get("team_name", ""),
-                            "rank":  0,
-                            "score": 50.0,
-                            "record": "0-0",
-                            "key_players": pick_key_players(rosters_flat.get(a_id, []), players_index, n=2),
-                        },
-                        "team_b": {
-                            "name": b["owner"].get("display_name", "?"),
-                            "team":  b["owner"].get("team_name", ""),
-                            "rank":  0,
-                            "score": 50.0,
-                            "record": "0-0",
-                            "key_players": pick_key_players(rosters_flat.get(b_id, []), players_index, n=2),
-                        },
+                        "team_a": a_side,
+                        "team_b": b_side,
                     }
+                    if "projected_points" in a_side and "projected_points" in b_side:
+                        a_pts = a_side["projected_points"]
+                        b_pts = b_side["projected_points"]
+                        spread = round(abs(a_pts - b_pts), 2)
+                        preview_motw["projected_spread"]   = spread
+                        preview_motw["projected_favorite"] = "team_a" if a_pts >= b_pts else "team_b"
         return {
             "league":      bundle.get("league", {}).get("name"),
             "week":        week,
@@ -273,14 +294,55 @@ def compute_rankings(bundle: dict, weights: dict,
                 break
 
     def motw_team_side(team_row, tid):
-        return {
+        # Find the projected_points for this team in the enriched matchup list.
+        # data.json.matchups[i].matchupList[j] now carries away_projected_points
+        # / home_projected_points attached by fetch_fantrax.py.
+        proj = None
+        matchups_with_proj = bundle.get("matchups") or []
+        period_matchups = next((p for p in matchups_with_proj if p.get("period") == week), None)
+        if period_matchups:
+            for m in period_matchups.get("matchupList", []):
+                if m.get("away", {}).get("id") == tid:
+                    proj = m.get("away_projected_points")
+                    break
+                if m.get("home", {}).get("id") == tid:
+                    proj = m.get("home_projected_points")
+                    break
+        side = {
             "name":   team_row["owner"].get("display_name", "?"),
             "team":   team_row["owner"].get("team_name", ""),
             "rank":   team_row["rank"],
             "score":  team_row["power_score"],
-            "record": f"{team_row['wins']}-{team_row['losses']}" + (f"-{team_row['ties']}" if team_row["ties"] else ""),
+            "record": f"{team_row['wins']}-{team_row['losses']}" + (f"-{team_row['ties']}" if team_row['ties'] else ""),
             "key_players": pick_key_players(rosters_flat.get(tid, []), players_index, n=2),
         }
+        if isinstance(proj, (int, float)):
+            side["projected_points"] = round(proj, 2)
+        return side
+
+    motw_payload = None
+    if motw:
+        tid_a = motw[0]["team_id"]
+        tid_b = motw[1]["team_id"]
+        proj_a = proj_b = spread = None
+        matchups_with_proj = bundle.get("matchups") or []
+        period_matchups = next((p for p in matchups_with_proj if p.get("period") == week), None)
+        if period_matchups:
+            for m in period_matchups.get("matchupList", []):
+                a, h = m.get("away", {}).get("id"), m.get("home", {}).get("id")
+                if {a, h} == {tid_a, tid_b}:
+                    proj_a = m.get("away_projected_points")
+                    proj_b = m.get("home_projected_points")
+                    spread = m.get("matchup_projected_spread")
+                    break
+        motw_payload = {
+            "status": motw_status,
+            "team_a": motw_team_side(motw[0], tid_a),
+            "team_b": motw_team_side(motw[1], tid_b),
+        }
+        if isinstance(spread, (int, float)) and isinstance(proj_a, (int, float)) and isinstance(proj_b, (int, float)):
+            motw_payload["projected_spread"]   = spread
+            motw_payload["projected_favorite"] = "team_a" if proj_a >= proj_b else "team_b"
 
     return {
         "league":      bundle.get("league", {}).get("name"),
@@ -288,11 +350,7 @@ def compute_rankings(bundle: dict, weights: dict,
         "season":      bundle.get("league", {}).get("season"),
         "season_type": "regular",
         "rankings":    ranked,
-        "matchup_of_week": {
-            "status": motw_status,
-            "team_a": motw_team_side(motw[0], motw[0]["team_id"]),
-            "team_b": motw_team_side(motw[1], motw[1]["team_id"]),
-        } if motw else None,
+        "matchup_of_week": motw_payload,
     }
 
 

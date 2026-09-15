@@ -91,17 +91,97 @@ def slim_player(player: dict) -> dict:
     }
 
 
-def fetch(league_id: str) -> dict:
+def fetch_sleeper_projections(season: int = 2026, week: int = 1) -> dict:
     """
-    Pull the full league bundle. All endpoints below are public when the
-    league is set to public under Commissioner → League Setup → Misc.
+    Fetch Sleeper's weekly projections and return a (name_norm, team) -> pts_half_ppr
+    lookup so we can match Fantrax players (whose IDs don't map to Sleeper's)
+    to projection data by name + NFL team.
 
-    Endpoints used:
-      - getLeagueInfo     → matchups, rosterInfo, scoringSystem, season
-      - getTeamRosters    → rosters by team for a given period
-      - getStandings      → current standings
-      - getPlayerIds      → NFL player index (cached)
+    The endpoint is public: https://api.sleeper.app/v1/projections/nfl/regular/{season}/{week}
     """
+    import urllib.request
+    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season}/{week}"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            data = json.loads(r.read())
+    except Exception as e:
+        print(f"[fetch_fantrax] WARN: sleeper projections fetch failed ({e})", file=sys.stderr)
+        return {}
+
+    # Build a name+team -> half-PPR projection lookup
+    # Sleeper projection keys are player IDs; the projection dict doesn't include
+    # player names directly, so we additionally fetch the players DB.
+    players_url = "https://api.sleeper.app/v1/players/nfl"
+    try:
+        with urllib.request.urlopen(players_url, timeout=60) as r:
+            players_db = json.loads(r.read())
+    except Exception as e:
+        print(f"[fetch_fantrax] WARN: sleeper players DB fetch failed ({e})", file=sys.stderr)
+        players_db = {}
+
+    lookup = {}
+    for pid, proj in data.items():
+        if not isinstance(proj, dict):
+            continue
+        pts = proj.get("pts_half_ppr")
+        if not isinstance(pts, (int, float)):
+            continue
+        pinfo = players_db.get(pid) or {}
+        first = (pinfo.get("first_name") or "").strip().lower()
+        last = (pinfo.get("last_name") or "").strip().lower()
+        team = (pinfo.get("team") or "").strip().upper()
+        if not first or not last or not team or team in ("FA", ""):
+            continue
+        # Two key formats: "last, first|TEAM" (Fantrax "Higgins, Tee" → "higgins, tee")
+        # and "first last|TEAM" — match either.
+        key_csv = f"{last}, {first}|{team}"
+        key_fs  = f"{first} {last}|{team}"
+        lookup.setdefault(key_csv, pts)
+        lookup.setdefault(key_fs, pts)
+    print(f"[fetch_fantrax] built projection lookup for {len(lookup)} player/team combos", file=sys.stderr)
+    return lookup
+
+
+def normalize_name_for_lookup(name: str) -> str:
+    """
+    Fantrax stores names as "Last, First". Return lowercase "last, first"
+    so we can match Sleeper's "first_name last_name" via the inverted key.
+    """
+    if not name:
+        return ""
+    name = name.strip().lower()
+    return name  # already in "last, first" form
+
+
+def projected_points_for_fantrax_team(team_roster: list, projection_lookup: dict) -> float:
+    """
+    Sum projected half-PPR points for the active roster slots of a Fantrax team.
+    Fantrax exposes ALL roster items in getTeamRosters; for projection purposes
+    we treat every ACTIVE starter-eligible position as contributing. Since
+    period=1 returns the full roster (we don't have a starters-only flag yet),
+    we compute total projections for the full roster as a rough estimate —
+    the spread comparison is what matters, and both sides use the same heuristic.
+    """
+    if not projection_lookup:
+        return 0.0
+    total = 0.0
+    for slot in team_roster or []:
+        if slot.get("status") and slot["status"] not in ("ACTIVE", "Active", None):
+            continue
+        player = slot.get("player") or {}
+        name = player.get("name") or ""
+        team = (player.get("team") or "").upper()
+        if not name or not team:
+            continue
+        # Fantrax format "Last, First" → match "last, first|TEAM"
+        key = f"{normalize_name_for_lookup(name)}|{team}"
+        pts = projection_lookup.get(key)
+        if pts:
+            total += float(pts)
+    return round(total, 2)
+
+
+def fetch(league_id: str) -> dict:
     print(f"[fetch_fantrax] pulling getLeagueInfo...", file=sys.stderr)
     league_info = _get(f"/getLeagueInfo?leagueId={league_id}")
 
@@ -184,6 +264,41 @@ def fetch(league_id: str) -> dict:
                         "handle": None,
                     }
 
+    # Projected points — pull Sleeper's weekly projections and join by name+team.
+    # Fantrax doesn't expose its own projection API publicly, so we use Sleeper's
+    # as a proxy. The scoring format we use (half-PPR) is close to typical
+    # Fantrax defaults; the *spread* comparison is what matters, not exact points.
+    season_year = league_info.get("seasonYear") or 2026
+    projection_lookup = fetch_sleeper_projections(season=season_year, week=1)
+    team_projected = {}
+    for tid, roster in rosters_flat.items():
+        team_projected[tid] = projected_points_for_fantrax_team(roster, projection_lookup)
+
+    # Attach projected_points + spread to every matchup in matchups[0]
+    matchups_with_proj = []
+    for period_block in league_info.get("matchups", []):
+        new_block = dict(period_block)
+        new_matchup_list = []
+        for matchup in period_block.get("matchupList", []):
+            away_id = matchup.get("away", {}).get("id")
+            home_id = matchup.get("home", {}).get("id")
+            away_proj = team_projected.get(away_id, 0.0)
+            home_proj = team_projected.get(home_id, 0.0)
+            spread = round(abs(away_proj - home_proj), 2)
+            new_matchup = dict(matchup)
+            new_matchup["away_projected_points"] = away_proj
+            new_matchup["home_projected_points"] = home_proj
+            new_matchup["matchup_projected_spread"] = spread
+            # Attach per-side projected_points + signed spread (favorite = negative)
+            for side, pid, proj in (("away", away_id, away_proj), ("home", home_id, home_proj)):
+                if side == "away":
+                    new_matchup["away_projected_spread"] = -spread if proj >= home_proj else spread
+                else:
+                    new_matchup["home_projected_spread"] = -spread if proj >  away_proj else spread
+            new_matchup_list.append(new_matchup)
+        new_block["matchupList"] = new_matchup_list
+        matchups_with_proj.append(new_block)
+
     return {
         "league": {
             "name": league_info.get("leagueName"),
@@ -195,12 +310,14 @@ def fetch(league_id: str) -> dict:
         },
         "users": list(users.values()),
         "rosters": rosters_flat,
-        "matchups": league_info.get("matchups", []),
+        "matchups": matchups_with_proj,
         "standings": standings,
         "scoring_system": league_info.get("scoringSystem"),
         "scoring_categories": (league_info.get("scoringSystem") or {}).get("scoringCategories"),
         "players_index": players_index,
         "week": 1,  # Updated by power_rankings; default to 1 (preseason snapshot)
+        "projections_available": bool(projection_lookup),
+        "scoring_format": "half_ppr_proxy",
         # Raw league_info retained for reference; not used by downstream code yet
         "_raw_league_info": league_info,
     }

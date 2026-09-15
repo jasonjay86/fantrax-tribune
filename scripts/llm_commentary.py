@@ -105,7 +105,10 @@ OUTPUT — strict JSON, exact shape:
                                   "rankings_blurb", "by_the_numbers", "closing"
 - lede:           OBJECT with "headline" (string), "deck" (string),
                     "body" (string, ~90 words)
-- motw_blurb:     STRING, plain prose, ~70 words
+- motw_blurb:     STRING, plain prose, ~70 words. If the data includes
+                    projected_points and projected_spread for the MOTW
+                    teams, MENTION them — that's the betting line the
+                    Tribune is built around.
 - pick:           OBJECT with:
                     "favorite"   (string, must be the team name or
                                   generic team name of one of the
@@ -118,7 +121,14 @@ OUTPUT — strict JSON, exact shape:
                                   negative number; if you take the
                                   underdog with the points, write it
                                   as a positive number. Range roughly
-                                  3 to 30.)
+                                  3 to 30.
+                                  **IMPORTANT**: the data includes a
+                                  pre-computed projected_spread and
+                                  projected_favorite in the matchup_of_week
+                                  payload. Use those numbers as your
+                                  baseline — adjust up to ±3 points if
+                                  you have an opinion, but never invent
+                                  a number out of thin air.)
                     "blurb"      (string, ~25-35 words, Madden betting
                                   voice)
 - rankings_blurb: STRING, plain prose, ~90 words (top-3 brief + bottom-1 dig)
@@ -161,7 +171,10 @@ OUTPUT — strict JSON, exact shape:
                                   "rankings_blurb", "by_the_numbers", "closing"
 - lede:           OBJECT with "headline" (string), "deck" (string),
                     "body" (string, ~90 words)
-- motw_blurb:     STRING, plain prose, ~70 words
+- motw_blurb:     STRING, plain prose, ~70 words. If the data includes
+                    projected_points and projected_spread for the MOTW
+                    teams, MENTION them — that's the betting line the
+                    Tribune is built around.
 - pick:           OBJECT with:
                     "favorite"   (string, must be the team name or
                                   generic team name of one of the
@@ -174,7 +187,14 @@ OUTPUT — strict JSON, exact shape:
                                   negative number; if you take the
                                   underdog with the points, write it
                                   as a positive number. Range roughly
-                                  3 to 30.)
+                                  3 to 30.
+                                  **IMPORTANT**: the data includes a
+                                  pre-computed projected_spread and
+                                  projected_favorite in the matchup_of_week
+                                  payload. Use those numbers as your
+                                  baseline — adjust up to ±3 points if
+                                  you have an opinion, but never invent
+                                  a number out of thin air.)
                     "blurb"      (string, ~25-35 words, Madden betting
                                   voice. State the pick in your own
                                   words, give a sentence or two of
@@ -347,11 +367,15 @@ def build_user_prompt(rankings: dict, site_cfg: dict, context: dict,
 def _motw_payload(motw):
     if not motw:
         return None
-    return {
+    payload = {
         "status": motw["status"],
         "team_a": motw["team_a"],
         "team_b": motw["team_b"],
     }
+    if "projected_spread" in motw:
+        payload["projected_spread"]   = motw["projected_spread"]
+        payload["projected_favorite"] = motw.get("projected_favorite")
+    return payload
 
 
 def extract_json(text: str) -> dict:
@@ -464,25 +488,155 @@ def call_minimax(system: str, user: str, model: str, base_url: str, api_key: str
 
 STUB_FALLBACK = {
     "lede": {
-        "headline": "BOOM \u2014 The Ballers Tribune Is Open For Business",
-        "deck":     "Twelve teams, twelve zeroes, one family league and a budding rivalry. The Tribune is on the couch.",
-        "body":     "Alright, alright, here we are. Twelve managers, twelve rosters, twelve zeroes across the board. You can't tell me anything yet \u2014 nobody's played. It's like calling a baseball game when the pitcher's still in the dugout. But here's what I CAN see. The patriarch is in. Three of his kids are in. The fourth sibling is somewhere else and probably relieved about it. There's a commissioner in here who happens to be the youngest of the bunch, which is its own little drama. And somebody named Roundhouse is allegedly feuding with someone \u2014 they won't say who. That's gonna be the year. Let's watch some football.",
+        "headline": "BOOM — Power Rankings",
+        "deck":     "Stub fallback — live model did not run this edition.",
+        "body":     "Alright, here's what we got. The Tribune's printing on a short bench this week, so you're getting the deterministic stub. Numbers in the tables below are real; the words around them are not. Coach'll fix it Tuesday.",
     },
-    "motw_blurb":     "BOOM \u2014 first matchup on the docket. Two teams, no scores, all preview. The Tribune is keeping the receipt for later. Dad's team is involved, which means somebody's about to learn something about their own roster in front of their kids.",
+    "motw_blurb":     "Stub fallback: live model did not run.",
     "pick": {
-        "favorite": "\u2014",
+        "favorite": "—",
         "spread": 0,
-        "blurb":   "[STUB \u2014 no LLM pick this edition; live model did not run]",
+        "blurb":   "[STUB — no LLM pick this edition; live model did not run]",
     },
-    "rankings_blurb": "Now watch this \u2014 here's a guy who's ranked number one. And here's another guy ranked number one. They're all ranked number one, that's the problem. Tiebreakers? None. Schedule? Same. Power score? Fifty flat, the whole board. You can't rank 'em yet. You just gotta play 'em.",
+    "rankings_blurb": "Stub fallback: rankings walk will be added back when the live model runs.",
     "by_the_numbers": [
-        {"value": "12", "label": "Coaches Drawing Up Plays"},
-        {"value": "0",  "label": "Games In The Books"},
-        {"value": "4",  "label": "Family Members On One Roster Tree"},
-        {"value": "1",  "label": "Budding Rivalry Nobody Will Name"},
+        {"value": "12", "label": "Teams in the Hunt"},
+        {"value": "?",  "label": "Top Power Score"},
+        {"value": "?",  "label": "Cellar Power Score"},
+        {"value": "?",  "label": "Week Number"},
     ],
-    "closing": "That's the week. Same couch, same family, next Tuesday. BOOM.",
+    "closing": "That's the stub. Live model will be back Tuesday.",
 }
+
+
+def _team_label(team_row: dict) -> str:
+    """Best display label for a rankings row."""
+    o = team_row.get("owner") or {}
+    return o.get("team_name") or o.get("display_name") or "Unknown"
+
+
+def _owner_label(team_row: dict) -> str:
+    o = team_row.get("owner") or {}
+    return o.get("display_name") or ""
+
+
+def build_dynamic_stub(rankings: dict) -> dict | None:
+    """
+    Build a deterministic stub commentary from the live rankings.json —
+    same shape the live LLM produces, but with real Week-N data instead
+    of frozen preseason lines. Used whenever MINIMAX_API_KEY is unset so
+    the page reads current state until the live model runs.
+
+    Returns None if rankings is too empty to write anything meaningful;
+    caller should fall back to STUB_FALLBACK in that case.
+    """
+    rs = rankings.get("rankings") or []
+    if not rs:
+        return None
+    week = rankings.get("week") or "?"
+    top = rs[0]
+    second = rs[1] if len(rs) > 1 else None
+    bottom = rs[-1]
+    second_last = rs[-2] if len(rs) > 1 else None
+
+    top_team = _team_label(top)
+    top_owner = _owner_label(top)
+    top_record = f"{top.get('wins', 0)}-{top.get('losses', 0)}"
+    top_pf = round(top.get("points_for") or 0, 1)
+    top_power = round(top.get("power_score") or 0, 1)
+
+    bottom_team = _team_label(bottom)
+    bottom_record = f"{bottom.get('wins', 0)}-{bottom.get('losses', 0)}"
+    bottom_pf = round(bottom.get("points_for") or 0, 1)
+
+    second_team = _team_label(second) if second else None
+    second_power = round((second or {}).get("power_score") or 0, 1) if second else None
+
+    # --- Lede ---
+    headline = f"BOOM — Week {week}, and {top_team}'s on top"
+    deck = (
+        f"{top_team} ({top_record}) sits at #1 with {top_pf} points and a "
+        f"{top_power} Power score. Twelve teams, one week in the books."
+    )
+    if second:
+        body = (
+            f"Alright, alright, here we are, week {week}. {top_team} — that's "
+            f"{top_owner or 'the top dog'} — sits at number one with a "
+            f"{top_record} record and {top_pf} on the scoreboard. "
+            f"{second_team} is right behind at #2 with a {second_power} "
+            f"Power score, so don't get comfortable up there. "
+            f"Bottom of the page: {bottom_team}, {bottom_record}, "
+            f"{bottom_pf} points. Bang-bang. Let's get into it."
+        )
+    else:
+        body = (
+            f"Alright, here we go, week {week}. {top_team} at number one, "
+            f"{top_record} on the year, {top_pf} points on the board. "
+            f"Twelve teams, one rung each. Bang-bang."
+        )
+
+    # --- MOTW blurb ---
+    motw = rankings.get("matchup_of_week") or {}
+    motw_blurb = ""
+    if motw.get("team_a") and motw.get("team_b"):
+        ta = motw["team_a"]; tb = motw["team_b"]
+        ta_team = ta.get("team") or ta.get("name") or "team_a"
+        tb_team = tb.get("team") or tb.get("name") or "team_b"
+        ta_rank = ta.get("rank", "?"); tb_rank = tb.get("rank", "?")
+        ta_proj = ta.get("projected_points"); tb_proj = tb.get("projected_points")
+        if isinstance(ta_proj, (int, float)) and isinstance(tb_proj, (int, float)):
+            motw_blurb = (
+                f"BOOM — {ta_team} (#{ta_rank}) at {round(ta_proj,1)} projected "
+                f"and {tb_team} (#{tb_rank}) at {round(tb_proj,1)}. "
+                f"Big board at the top, somebody's gotta blink. We'll see who Sunday."
+            )
+        else:
+            motw_blurb = (
+                f"BOOM — {ta_team} (#{ta_rank}) and {tb_team} (#{tb_rank}), "
+                f"and this is the one the Tribune's watching. Big board at the "
+                f"top, somebody's gotta blink. We'll see who Sunday."
+            )
+
+    # --- Rankings blurb ---
+    if second_last:
+        second_last_team = _team_label(second_last)
+        second_last_record = f"{second_last.get('wins', 0)}-{second_last.get('losses', 0)}"
+        rankings_blurb = (
+            f"Now watch this — {top_team} at number one, "
+            f"{second_team} at two, and {second_last_team} at eleven ({second_last_record}). "
+            f"{bottom_team} at the bottom ({bottom_record}). "
+            f"It's a long season. Twelve teams, only one trophy, and a lot of "
+            f"tape to watch between now and December."
+        )
+    else:
+        rankings_blurb = (
+            f"Now watch this — {top_team} at number one, "
+            f"{bottom_team} at the bottom. It's a long season, and the board's "
+            f"gonna move every Tuesday. Twelve teams, only one trophy."
+        )
+
+    # --- By the numbers ---
+    by_the_numbers = [
+        {"value": str(top_power),  "label": "Top Power Score"},
+        {"value": str(round((rs[-1].get("power_score") or 0), 1)), "label": "Cellar Power Score"},
+        {"value": str(len(rs)),    "label": "Teams in the Hunt"},
+        {"value": str(week),       "label": "Week Number"},
+    ]
+
+    # --- Closing ---
+    closing = (
+        f"That's week {week}, folks. Same couch, same friends, next Tuesday. BOOM."
+    )
+
+    out = {
+        "lede": {"headline": headline, "deck": deck, "body": body},
+        "rankings_blurb": rankings_blurb,
+        "by_the_numbers": by_the_numbers,
+        "closing": closing,
+    }
+    if motw_blurb:
+        out["motw_blurb"] = motw_blurb
+    return out
 
 
 def main():
@@ -508,9 +662,18 @@ def main():
     user_prompt = build_user_prompt(rankings, cfg, context, personal_bits=chosen_bits)
 
     if args.dry_run or not os.environ.get("MINIMAX_API_KEY"):
-        Path(args.out).write_text(json.dumps(STUB_FALLBACK, indent=2))
-        print(f"[llm_commentary] wrote {args.out} (stub, no API key)")
-        return
+            # Dynamic stub first: build a real-data stub from rankings.json so
+            # the page reads current state instead of frozen preseason lines.
+            # STUB_FALLBACK only fires if the dynamic builder can't read the
+            # rankings at all (e.g. data.json corruption).
+            stub = build_dynamic_stub(rankings) or dict(STUB_FALLBACK)
+            # motw_blurb: the dynamic builder already sets this from the live
+            # matchup_of_week. Don't overwrite it.
+            if not isinstance(stub.get("pick"), dict) or not stub["pick"].get("favorite") or stub["pick"]["favorite"] == "—":
+                stub["pick"] = _fallback_pick(rankings, stub) or stub.get("pick", STUB_FALLBACK["pick"])
+            Path(args.out).write_text(json.dumps(stub, indent=2))
+            print(f"[llm_commentary] wrote {args.out} (stub, no API key) — pick filled from projections")
+            return
 
     raw = call_minimax(
             system=SYSTEM_PROMPT + OUTPUT_FORMAT_NOTES,
@@ -541,13 +704,57 @@ def main():
             print(f"[llm_commentary] pick malformed: {pk}. Dropping pick.", file=sys.stderr)
             commentary["pick"] = None
     elif pk is None:
-        pass  # LLM omitted it intentionally
+        # LLM omitted the pick — fill it in deterministically from the
+        # projected spread in rankings.json so the Tribune never goes
+        # without a betting line.
+        commentary["pick"] = _fallback_pick(rankings, commentary)
     else:
         # Unexpected type
         commentary["pick"] = None
 
+    if commentary.get("pick") is None:
+        commentary["pick"] = _fallback_pick(rankings, commentary)
+
     Path(args.out).write_text(json.dumps(commentary, indent=2))
     print(f"[llm_commentary] wrote {args.out} (from API)")
+
+
+def _fallback_pick(rankings: dict, commentary: dict) -> dict | None:
+    """
+    Build a deterministic pick from the projected spread in rankings.json
+    when the LLM omits the pick or returns a malformed one. Favorite gets
+    a negative spread (Vegas convention), underdog gets positive. Blurb is
+    a short Madden-voice stub.
+
+    If the projected spread is 0 or missing (e.g. tied projections early
+    in the week), fall back to picking the higher-ranked team (team_a) with
+    a small synthetic favorite spread of 3 — never return None. The Tribune
+    editorial policy ships a deterministic placeholder rather than an empty
+    box, so the Tribune Pick section must always have a real team in it.
+    """
+    motw = (rankings or {}).get("matchup_of_week") or {}
+    if not motw or not (motw.get("team_a") and motw.get("team_b")):
+        return None
+    spread_raw = motw.get("projected_spread")
+    if not isinstance(spread_raw, (int, float)) or spread_raw == 0:
+        # Tie or no projections — synthesize a small favorite line.
+        spread = 3.0
+        fav_side = "team_a"
+    else:
+        spread = float(spread_raw)
+        fav_side = motw.get("projected_favorite") or (
+            "team_a" if spread >= 0 else "team_b"
+        )
+    fav = motw.get(fav_side) or {}
+    under_side = "team_b" if fav_side == "team_a" else "team_a"
+    under = motw.get(under_side) or {}
+    fav_name = fav.get("team") or fav.get("name") or fav_side
+    under_name = under.get("team") or under.get("name") or under_side
+    return {
+        "favorite": fav_name,
+        "spread": -round(spread, 2),  # favorite is negative (Vegas)
+        "blurb": f"BOOM — {fav_name} lays {round(spread, 1)} on the road against {under_name}. Tribune calls it straight up. Cook the books.",
+    }
 
 
 if __name__ == "__main__":
