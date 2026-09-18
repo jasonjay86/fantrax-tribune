@@ -306,21 +306,42 @@ def compute_rankings(bundle: dict, weights: dict,
             if a and b:
                 week_pairs.append({a, b})
 
+    # Matchup-of-the-Week selection:
+    #   1. Top 2 play each other this week → use them (the marquee case).
+    #   2. Otherwise pick the pair with the smallest rank distance, breaking
+    #      ties by the highest combined power score. Surfaces the most
+    #      competitive matchup the schedule actually offers, not just
+    #      "top team vs whoever they're stuck playing."
     motw = None
     motw_status = "preview"
-    top_two = (ranked[0]["team_id"], ranked[1]["team_id"])
-    for pair in week_pairs:
-        if top_two[0] in pair and top_two[1] in pair:
-            motw = (ranked[0], ranked[1])
-            break
-    if motw is None and ranked:
+    rank_by_id = {r["team_id"]: r["rank"] for r in ranked}
+    ranked_by_id = {r["team_id"]: r for r in ranked}
+
+    if ranked and len(ranked) >= 2:
+        top_two = (ranked[0]["team_id"], ranked[1]["team_id"])
         for pair in week_pairs:
-            if ranked[0]["team_id"] in pair:
-                opp_id = next(t for t in pair if t != ranked[0]["team_id"])
-                opp = next((x for x in ranked if x["team_id"] == opp_id), None)
-                if opp:
-                    motw = (ranked[0], opp)
+            if top_two[0] in pair and top_two[1] in pair:
+                motw = (ranked[0], ranked[1])
                 break
+
+    if motw is None and ranked and week_pairs:
+        best = None  # (rank_distance, -combined_power, team_a_row, team_b_row)
+        for pair in week_pairs:
+            ids = [tid for tid in pair if tid in rank_by_id]
+            if len(ids) != 2:
+                continue
+            a_id, b_id = ids
+            ra, rb = rank_by_id[a_id], rank_by_id[b_id]
+            distance = abs(ra - rb)
+            combined_power = (
+                ranked_by_id[a_id]["power_score"] + ranked_by_id[b_id]["power_score"]
+            )
+            # Lower distance is better; higher combined_power is the tiebreaker.
+            key = (distance, -combined_power)
+            if best is None or key < best[0]:
+                best = (key, ranked_by_id[a_id], ranked_by_id[b_id])
+        if best is not None:
+            motw = (best[1], best[2])
 
     def motw_team_side(team_row, tid):
         # Find the projected_points for this team in the enriched matchup list.
