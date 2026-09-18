@@ -13,11 +13,48 @@ import json
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 BASE = "https://www.fantrax.com/fxea/general"
 PLAYERS_CACHE = Path("cache/players_nfl.json")
 PLAYERS_CACHE_MAX_AGE_DAYS = 7
+
+
+def _current_period(league_info: dict) -> int:
+    """
+    Derive the current NFL scoring period from league_info.scoringPeriods.
+
+    Each period has {number, startDate, endDate}. The current period is the
+    one whose date window contains today (UTC). If today falls before any
+    period (preseason) we return 1; if after the last period (postseason),
+    we return the last period number.
+    """
+    periods = league_info.get("scoringPeriods") or []
+    if not periods:
+        return 1
+    now = datetime.now(timezone.utc)
+    # Sort defensively in case the API returns them out of order
+    periods = sorted(periods, key=lambda p: p.get("number", 0))
+    for p in periods:
+        try:
+            start = datetime.fromisoformat(p["startDate"].replace("Z", "+00:00"))
+            end   = datetime.fromisoformat(p["endDate"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        if start <= now <= end:
+            return int(p["number"])
+    # Today is before any period (preseason) or after the last one
+    try:
+        first_start = datetime.fromisoformat(periods[0]["startDate"].replace("Z", "+00:00"))
+        if now < first_start:
+            return int(periods[0]["number"])
+    except (KeyError, ValueError):
+        pass
+    try:
+        return int(periods[-1]["number"])
+    except (KeyError, ValueError):
+        return 1
 
 
 def _get(path: str, retries: int = 3, backoff: float = 1.5):
@@ -409,7 +446,7 @@ def fetch(league_id: str) -> dict:
         "scoring_system": league_info.get("scoringSystem"),
         "scoring_categories": (league_info.get("scoringSystem") or {}).get("scoringCategories"),
         "players_index": players_index,
-        "week": 1,  # Updated by power_rankings; default to 1 (preseason snapshot)
+        "week": _current_period(league_info),  # dynamic from scoringPeriods/today
         "projections_available": bool(projection_lookup),
         "scoring_format": "half_ppr_proxy",
         # Per-starter projections keyed by team_id -> {player_id: pts}. Used

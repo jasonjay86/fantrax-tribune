@@ -63,20 +63,36 @@ def build_user_map(users, generic_names: dict[str, str] | None = None):
 
 def current_week(bundle: dict) -> int:
     """
-    Best-effort current week. Fantrax doesn't expose a /state/nfl equivalent
-    we can hit cheaply; we use the first scoringPeriod that's not "off" if
-    available, otherwise default to 1.
+    Best-effort current week. Preferred source: bundle["week"] (set by
+    fetch_fantrax from scoringPeriods vs. today). Fallback: derive from
+    scoringPeriods directly using the same date-window logic, so this
+    works even if a stale data.json gets through.
     """
+    # Prefer the value computed upstream — it already handles edge cases.
+    wk = bundle.get("week")
+    if isinstance(wk, int) and wk >= 1:
+        return wk
+
+    # Fallback: derive from scoringPeriods using today's date.
     raw = bundle.get("_raw_league_info") or {}
     periods = raw.get("scoringPeriods") or []
-    for p in periods:
-        # Some scoringPeriods are dicts with status info, others are ints
-        if isinstance(p, dict):
-            status = (p.get("status") or "").lower()
-            if status not in ("off", "final", "completed", ""):
-                return p.get("period", 1)
-        elif isinstance(p, int) and p == 1:
-            return 1
+    if not periods:
+        return 1
+
+    try:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        periods_sorted = sorted(periods, key=lambda p: p.get("number", 0))
+        for p in periods_sorted:
+            try:
+                start = datetime.fromisoformat(p["startDate"].replace("Z", "+00:00"))
+                end   = datetime.fromisoformat(p["endDate"].replace("Z", "+00:00"))
+                if start <= now <= end:
+                    return int(p["number"])
+            except (KeyError, ValueError):
+                continue
+    except ImportError:
+        pass
     return 1
 
 
