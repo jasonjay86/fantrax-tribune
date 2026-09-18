@@ -308,10 +308,11 @@ def compute_rankings(bundle: dict, weights: dict,
 
     # Matchup-of-the-Week selection:
     #   1. Top 2 play each other this week → use them (the marquee case).
-    #   2. Otherwise pick the pair with the smallest rank distance, breaking
-    #      ties by the highest combined power score. Surfaces the most
-    #      competitive matchup the schedule actually offers, not just
-    #      "top team vs whoever they're stuck playing."
+    #   2. Otherwise pick the most compelling matchup: maximise combined
+    #      wins first (a close game between two 0-1 squads is not marquee;
+    #      a 10-point game between two 1-0 squads is), then break ties
+    #      by the smallest projected spread, then by highest combined
+    #      projected total as a final tiebreaker.
     motw = None
     motw_status = "preview"
     rank_by_id = {r["team_id"]: r["rank"] for r in ranked}
@@ -325,21 +326,44 @@ def compute_rankings(bundle: dict, weights: dict,
                 break
 
     if motw is None and ranked and week_pairs:
-        best = None  # (rank_distance, -combined_power, team_a_row, team_b_row)
+        # Look up projected points from bundle["matchups"] for this period.
+        period_matchups = next(
+            (p for p in (bundle.get("matchups") or [])
+             if p.get("period") == week), None
+        )
+        proj_lookup = {}
+        if period_matchups:
+            for m in period_matchups.get("matchupList", []):
+                a_id = m.get("away", {}).get("id")
+                h_id = m.get("home", {}).get("id")
+                pa = m.get("away_projected_points")
+                pb = m.get("home_projected_points")
+                if a_id and isinstance(pa, (int, float)):
+                    proj_lookup[a_id] = pa
+                if h_id and isinstance(pb, (int, float)):
+                    proj_lookup[h_id] = pb
+
+        best = None  # (-combined_wins, spread, -combined_proj, a_row, b_row)
         for pair in week_pairs:
             ids = [tid for tid in pair if tid in rank_by_id]
             if len(ids) != 2:
                 continue
             a_id, b_id = ids
-            ra, rb = rank_by_id[a_id], rank_by_id[b_id]
-            distance = abs(ra - rb)
-            combined_power = (
-                ranked_by_id[a_id]["power_score"] + ranked_by_id[b_id]["power_score"]
-            )
-            # Lower distance is better; higher combined_power is the tiebreaker.
-            key = (distance, -combined_power)
+            a_row, b_row = ranked_by_id[a_id], ranked_by_id[b_id]
+            combined_wins = a_row["wins"] + b_row["wins"]
+            pa = proj_lookup.get(a_id)
+            pb = proj_lookup.get(b_id)
+            if isinstance(pa, (int, float)) and isinstance(pb, (int, float)):
+                spread = abs(pa - pb)
+                combined_proj = pa + pb
+            else:
+                spread = float("inf")
+                combined_proj = -float("inf")
+            # Lower is better: more wins first, then closer spread,
+            # then higher combined projection as the final tiebreaker.
+            key = (-combined_wins, spread, -combined_proj)
             if best is None or key < best[0]:
-                best = (key, ranked_by_id[a_id], ranked_by_id[b_id])
+                best = (key, a_row, b_row)
         if best is not None:
             motw = (best[1], best[2])
 
