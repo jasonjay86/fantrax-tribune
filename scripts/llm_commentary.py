@@ -239,8 +239,14 @@ OUTPUT — strict JSON, exact shape:
                                   or even that confident. Just sound
                                   like a guy with an opinion, calling
                                   the game.)
-- rankings_blurb: STRING, plain prose, ~90 words. NO bios. Just names
-                    and what they did.
+- rankings_blurb: STRING, plain prose, ~90 words. NO bios. Talk about
+                    the **power score** (the composite number from 40-100
+                    that ranks the team — see `power_score` in the data),
+                    NOT raw points-for / points-against. The power score
+                    is what the rankings table is built on, so the blurb
+                    should reference those numbers. Mentioning points-for
+                    is fine as a secondary anchor but the spine of the
+                    walk should be power-score movement.
 - by_the_numbers: ARRAY of EXACTLY 4 OBJECTS, each with "value" (string)
                     and "label" (string)
 - closing:        STRING, plain prose, ~25 words

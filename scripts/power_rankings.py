@@ -205,7 +205,22 @@ def compute_rankings(bundle: dict, weights: dict,
     user_map = build_user_map(users, generic_names=generic_names)
     enriched = standings_to_enriched(standings, user_map, list(rosters_flat.keys()))
 
-    week = current_week(bundle)
+    # `week` from the bundle reflects the period whose date window contains
+    # now. On Tuesday morning after Week N ended, Fantrax's window still
+    # says Week N (because Week N+1 NFL games haven't started yet — those
+    # kick off Thu/Fri/Sun). But the Tribune generated today is a Week
+    # N+1 Edition (previewing Week N+1, recapping Week N). Bump by 1 to
+    # align with Sleeper's `nfl_state.week` which already ticks over once
+    # the prior week's games end. Sleeper fetcher does NOT need this bump
+    # — nfl_state.week is already "upcoming week" from the API.
+    #
+    # IMPORTANT: `raw_week` (bundle's value) is what we pass to
+    # _build_last_week_results — the standings delta math is based on the
+    # raw cumulative numbers from Fantrax's API which still reflect
+    # through-prior-week. The displayed `week` is bumped by 1 to label
+    # the Tribune edition correctly.
+    raw_week = current_week(bundle)
+    week = raw_week + 1 if raw_week else raw_week
 
     played = [r for r in enriched if r["games"] > 0]
 
@@ -444,7 +459,10 @@ def compute_rankings(bundle: dict, weights: dict,
     # stats that vary week-to-week. Fantrax doesn't expose per-week
     # actuals, so this is derived from standings delta against the
     # prior Tribune run's snapshot (state/last_week_totals.json).
-    last_week_results = _build_last_week_results(bundle, week, ranked_by_id)
+    # Pass raw_week (bundle value) — the delta math needs to compare
+    # against the prior snapshot which represents cumulative through
+    # that earlier period, NOT the displayed Tribune week.
+    last_week_results = _build_last_week_results(bundle, raw_week, ranked_by_id)
 
     return {
         "league":      bundle.get("league", {}).get("name"),
@@ -503,6 +521,22 @@ def _build_last_week_results(bundle: dict,
     if prior_week is not None and prior_week >= current_week:
         return None
 
+    # The delta between prior snapshot (cumulative through prior_week) and
+    # current cumulative reflects scoring for ALL weeks AFTER prior_week
+    # and UP TO current_week. In normal operation prior_week = current_week - 1
+    # and this delta = exactly one week's scoring — the week that's about to
+    # end (games complete, standings final). Label the recap with the just-
+    # completed week (= current_week from the bundle, since current_week is
+    # "the week we're inside" and its games are now done). If the snapshot
+    # is stale (prior_week < current_week - 1), the delta covers multiple
+    # weeks and is less precise — still useful as a "recent action" recap.
+    recap_week = current_week
+
+    # The matchup block we want is the one whose scoring the delta
+    # represents — period == current_week (the just-ended period) in the
+    # common case where prior_week = current_week - 1.
+    recap_period = current_week
+
     # Current cumulative standings
     standings = bundle.get("standings") or []
     curr_totals = {s.get("teamId"): float(s.get("totalPointsFor") or 0)
@@ -527,7 +561,7 @@ def _build_last_week_results(bundle: dict,
     raw_matchups = bundle.get("matchups") or []
     period_block = None
     for p in raw_matchups:
-        if p.get("period") == last_week:
+        if p.get("period") == recap_period:
             period_block = p
             break
     if not period_block:
@@ -587,7 +621,7 @@ def _build_last_week_results(bundle: dict,
         )
 
     return {
-        "week": last_week,
+        "week": recap_week,
         "results": results,
         "top_scorer": {
             "team": top["winner"],
@@ -654,10 +688,32 @@ def main():
     # Save cumulative standings snapshot so the NEXT run can compute
     # last-week per-team scoring via standings delta. See
     # _build_last_week_results() for the consumer side.
-    try:
-        save_last_week_totals(bundle, result["week"])
-    except Exception as e:
-        print(f"[power_rankings] WARNING: could not save standings snapshot: {e}", file=__import__("sys").stderr)
+    #
+    # Skip the save when the existing snapshot is older than the previous
+    # week — that's a sign of bootstrap debt (a synthetic snapshot was
+    # planted to seed the recap for THIS run; overwriting it would lose
+    # that seed before the natural next-run cycle can fix things). The
+    # next cron after a clean baseline will save normally.
+    state_path = Path("state") / "last_week_totals.json"
+    should_save = True
+    if state_path.exists():
+        try:
+            prior = json.loads(state_path.read_text())
+            current_week = result.get("week") or 0
+            prior_week = prior.get("week") or 0
+            if prior_week < current_week - 1:
+                # Snapshot represents an earlier week than last week — likely
+                # a synthetic bootstrap; don't clobber until natural reseed.
+                should_save = False
+                print(f"[power_rankings] preserving snapshot from week {prior_week} "
+                      f"(would clobber synthetic bootstrap until natural reseed)", file=__import__("sys").stderr)
+        except Exception:
+            pass
+    if should_save:
+        try:
+            save_last_week_totals(bundle, result["week"])
+        except Exception as e:
+            print(f"[power_rankings] WARNING: could not save standings snapshot: {e}", file=__import__("sys").stderr)
     print(f"[power_rankings] wrote {args.out}")
     print(f"  {len(result['rankings'])} teams ranked, week {result['week']} ({result['season_type']})")
     for r in result["rankings"]:
