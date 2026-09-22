@@ -102,11 +102,41 @@ FACTS — sparingly, only as seasoning:
   by name and what they're projected to do this week — no career history.
 - Refer to owners by their Fantrax team_name or username ONLY.
 
+LEDE — RECAP LAST WEEK, NOT THIS WEEK'S PREVIEW:
+- The lede sits at the TOP of the page. The Matchup-of-the-Week box sits
+  just below it. They are not allowed to talk about the same thing.
+- lede.body MUST recap LAST WEEK's action — biggest blowout, surprise win,
+  top scorer, closest game, biggest upset. The MOTW section below already
+  covers this week's preview; do NOT repeat that material here.
+- lede.headline + lede.deck: about last week's outcomes, not this week.
+- If no last_week_results data is provided (week 1, off-season, snapshot
+  not yet saved), recap the standings shape instead ("three teams at
+  2-0, four at 0-2, here's what that means"). Do NOT default to
+  previewing the MOTW.
+
+BY THE NUMBERS — MAKE THESE VARIES WEEK-TO-WEEK:
+- These boxes sit at the BOTTOM of the page and are the second thing
+  commissioners and owners scan after the lede. They MUST feel fresh
+  every edition — same labels every week is a sign of a lazy model.
+- Pull from this week's actual data. Good sources (in rough priority order):
+    * Last-week recap numbers (top scorer, biggest blowout margin,
+      closest-game margin, biggest-upset margin)
+    * League scoring quirks (1st-down rush bonus, 50+ yd completion bonus,
+      50+ yd passing TD bonus, TE premium per reception)
+    * Standings shape (teams tied at the top, longest losing streak,
+      highest PF-per-game)
+- Keep value strings short (1-4 chars or a single number). Labels can be
+  a phrase but should fit on one line in the rendered card.
+
 OUTPUT — strict JSON, exact shape:
 - One JSON object. No markdown fences. No preamble.
-- `lede` is mandatory. Everything else is encouraged but optional —
-  the Tribune will gracefully suppress any section you skip. (But
-  best results come from emitting all six.)
+- ALL SIX FIELDS ARE REQUIRED — `lede`, `motw_blurb`, `pick`,
+  `rankings_blurb`, `by_the_numbers`, `closing`. The Tribune handles
+  missing fields gracefully, but you should NEVER skip a section:
+  previous runs that omitted motw_blurb, rankings_blurb, by_the_numbers,
+  or closing left the page looking half-finished. Emit all six every
+  time. If you are running out of tokens, cut VERBOSITY inside each
+  section, never skip a section entirely.
 - Keys (exact, in this order): "lede", "motw_blurb", "pick",
                                   "rankings_blurb", "by_the_numbers", "closing"
 - lede:           OBJECT with "headline" (string), "deck" (string),
@@ -365,6 +395,17 @@ def build_user_prompt(rankings: dict, site_cfg: dict, context: dict,
         "commissioner_handle": site_cfg.get("commissioner_handle"),
     }
 
+    # Last-week recap payload — pulled from rankings.json (built by
+    # power_rankings._build_last_week_results from standings delta against
+    # the prior Tribune run's snapshot). When present, the LLM uses it as
+    # the lede's primary subject (last week's results, not this week's
+    # preview). When absent (week 1, preseason, snapshot not yet saved),
+    # the LLM falls back to recapping the standings shape — see SYSTEM_PROMPT
+    # "LEDE" rule.
+    last_week = rankings.get("last_week_results")
+    if last_week:
+        payload["last_week_results"] = last_week
+
     # Personal bits: 0-2 short one-liners curated for variety. If the list
     # is empty, the model just calls the football.
     if personal_bits:
@@ -395,9 +436,14 @@ def extract_json(text: str) -> dict:
     Extract the first valid JSON object from the response.
 
     Tolerates models that wrap JSON in ```json ... ``` fences despite the
-    instruction. Uses a balanced-brace scan to avoid the greedy-regex bug
-    where trailing prose after a JSON object gets concatenated into the
-    captured substring.
+    instruction. Also tolerates the model emitting TWO concatenated JSON
+    objects (sometimes happens when the model splits its output mid-stream
+    — first object has lede/motw_blurb/pick/rankings_blurb, second has
+    by_the_numbers/closing). We parse the first valid object as the
+    primary, then scan the rest of the response for additional top-level
+    fields and merge them in.
+
+    Returns the merged dict.
     """
     text = (text or "").strip()
     if not text:
@@ -406,48 +452,66 @@ def extract_json(text: str) -> dict:
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
 
-    # Find the first balanced {...} block
-    start = text.find("{")
-    if start == -1:
-        raise SystemExit("[llm_commentary] no JSON object found in response.")
-
-    depth = 0
-    in_string = False
-    escape = False
-    end = -1
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-
-    if end == -1:
-        print("[llm_commentary] unbalanced braces. First 600 chars:", file=sys.stderr)
-        print(text[:600], file=sys.stderr)
-        raise SystemExit("[llm_commentary] could not find a balanced JSON object.")
-
-    candidate = text[start:end]
+    decoder = json.JSONDecoder()
     try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as e:
-        print(f"[llm_commentary] parse error on candidate. First 600 chars:", file=sys.stderr)
-        print(candidate[:600], file=sys.stderr)
-        raise SystemExit(f"[llm_commentary] JSON parse error: {e}")
+        primary, end = decoder.raw_decode(text)
+        leftover = text[end:].strip()
+    except json.JSONDecodeError:
+        # Fallback: scan for first balanced { ... } block (legacy behavior)
+        start = text.find("{")
+        if start == -1:
+            raise SystemExit("[llm_commentary] no JSON object found in response.")
+        depth = 0
+        in_string = False
+        escape = False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end == -1:
+            print("[llm_commentary] unbalanced braces. First 600 chars:", file=sys.stderr)
+            print(text[:600], file=sys.stderr)
+            raise SystemExit("[llm_commentary] could not find a balanced JSON object.")
+        primary = json.loads(text[start:end])
+        leftover = text[end:].strip()
+
+    # If there's leftover content, scan it for additional JSON fields we
+    # can merge into the primary object. The LLM occasionally emits a
+    # second `{...}` containing by_the_numbers and closing.
+    if leftover and leftover.startswith(","):
+        leftover = "{" + leftover
+    elif leftover and leftover.startswith("{"):
+        pass
+    elif leftover:
+        leftover = "{" + leftover
+
+    if leftover and leftover.startswith("{"):
+        try:
+            secondary, _ = decoder.raw_decode(leftover)
+            if isinstance(secondary, dict):
+                for k, v in secondary.items():
+                    primary.setdefault(k, v)
+        except json.JSONDecodeError:
+            pass
+
+    return primary
 
 
 def call_minimax(system: str, user: str, model: str, base_url: str, api_key: str, max_tokens: int = 1800) -> str:

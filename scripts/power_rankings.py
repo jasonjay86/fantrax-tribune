@@ -282,6 +282,8 @@ def compute_rankings(bundle: dict, weights: dict,
                 for i, r in enumerate(enriched)
             ],
             "matchup_of_week": preview_motw,
+            # Preseason/early-return path: no last-week recap to compute.
+            "last_week_results": None,
         }
 
     # In-season path — composite ranking
@@ -437,6 +439,13 @@ def compute_rankings(bundle: dict, weights: dict,
             motw_payload["projected_spread"]   = spread
             motw_payload["projected_favorite"] = "team_a" if proj_a >= proj_b else "team_b"
 
+    # Last-week recap — fed to the LLM commentary so the lede recaps
+    # previous-week action and the stat boxes can highlight last-week
+    # stats that vary week-to-week. Fantrax doesn't expose per-week
+    # actuals, so this is derived from standings delta against the
+    # prior Tribune run's snapshot (state/last_week_totals.json).
+    last_week_results = _build_last_week_results(bundle, week, ranked_by_id)
+
     return {
         "league":      bundle.get("league", {}).get("name"),
         "week":        week,
@@ -444,7 +453,189 @@ def compute_rankings(bundle: dict, weights: dict,
         "season_type": "regular",
         "rankings":    ranked,
         "matchup_of_week": motw_payload,
+        "last_week_results": last_week_results,
     }
+
+
+def _build_last_week_results(bundle: dict,
+                              current_week: int,
+                              ranked_by_id: dict) -> dict | None:
+    """
+    Build a last-week recap payload from Fantrax standings delta.
+
+    Fantrax's API exposes only cumulative totalPointsFor in standings,
+    not per-week scoring. To get last-week actuals we maintain a snapshot
+    file (state/last_week_totals.json) that records each team's
+    totalPointsFor as of the previous successful Tribune run. The delta
+    between the current snapshot and the previous snapshot IS each team's
+    points scored in the last completed week.
+
+    Returns None when:
+      - No prior snapshot exists (first-ever run, snapshot was cleared)
+      - Current week is 1 (no prior week to recap)
+      - Bundle is missing required fields
+
+    Returns the same shape as KTC's helper (see keep-the-change-tribune's
+    power_rankings._build_last_week_results) so the LLM commentary can
+    consume either side identically.
+    """
+    last_week = current_week - 1
+    if last_week < 1:
+        return None
+
+    state_path = Path("state") / "last_week_totals.json"
+    if not state_path.exists():
+        return None
+
+    try:
+        prior = json.loads(state_path.read_text())
+    except Exception:
+        return None
+    if not isinstance(prior, dict) or not prior.get("totals_by_team"):
+        return None
+
+    prior_totals = prior["totals_by_team"]      # team_id -> totalPointsFor (last run)
+    prior_week   = prior.get("week")            # the week number recorded
+
+    # The snapshot was saved AFTER the prior Tribune run. If the prior run
+    # was for the same week we're now processing, no games have been played
+    # in between — we can't compute a delta.
+    if prior_week is not None and prior_week >= current_week:
+        return None
+
+    # Current cumulative standings
+    standings = bundle.get("standings") or []
+    curr_totals = {s.get("teamId"): float(s.get("totalPointsFor") or 0)
+                   for s in standings if s.get("teamId")}
+
+    if not curr_totals or not prior_totals:
+        return None
+
+    # Per-team last-week points = current cumulative - prior cumulative
+    last_week_points = {}
+    for tid, curr in curr_totals.items():
+        prev = float(prior_totals.get(tid, 0) or 0)
+        delta = round(curr - prev, 1)
+        if delta > 0:
+            last_week_points[tid] = delta
+
+    if not last_week_points:
+        return None
+
+    # Pair teams via Fantrax's last-week matchup block (the schedule is
+    # already in the bundle — matchups[last_week - 1].matchupList).
+    raw_matchups = bundle.get("matchups") or []
+    period_block = None
+    for p in raw_matchups:
+        if p.get("period") == last_week:
+            period_block = p
+            break
+    if not period_block:
+        return None
+    matchup_list = period_block.get("matchupList") or []
+
+    def _label(tid):
+        row = ranked_by_id.get(tid) or {}
+        o = row.get("owner") or {}
+        return o.get("team_name") or o.get("display_name") or tid
+
+    results = []
+    for m in matchup_list:
+        a_id = m.get("away", {}).get("id")
+        h_id = m.get("home", {}).get("id")
+        a_pts = last_week_points.get(a_id)
+        h_pts = last_week_points.get(h_id)
+        if a_pts is None or h_pts is None:
+            continue
+        if a_pts == h_pts:
+            continue
+        if a_pts > h_pts:
+            winner, loser = a_id, h_id
+            winner_pts, loser_pts = a_pts, h_pts
+        else:
+            winner, loser = h_id, a_id
+            winner_pts, loser_pts = h_pts, a_pts
+        margin = round(winner_pts - loser_pts, 2)
+        winner_rank = (ranked_by_id.get(winner) or {}).get("rank")
+        loser_rank  = (ranked_by_id.get(loser)  or {}).get("rank")
+        was_upset = (isinstance(winner_rank, int)
+                     and isinstance(loser_rank, int)
+                     and winner_rank > loser_rank)
+        results.append({
+            "winner": _label(winner),
+            "winner_points": round(winner_pts, 1),
+            "loser": _label(loser),
+            "loser_points": round(loser_pts, 1),
+            "margin": margin,
+            "winner_rank": winner_rank,
+            "loser_rank": loser_rank,
+            "was_upset": was_upset,
+        })
+
+    if not results:
+        return None
+
+    top = max(results, key=lambda r: r["winner_points"])
+    biggest_blowout = max(results, key=lambda r: r["margin"])
+    closest_game   = min(results, key=lambda r: r["margin"])
+    upsets = [r for r in results if r["was_upset"]]
+    biggest_upset = None
+    if upsets:
+        biggest_upset = max(
+            upsets,
+            key=lambda r: (r["margin"], r["winner_rank"] - r["loser_rank"]),
+        )
+
+    return {
+        "week": last_week,
+        "results": results,
+        "top_scorer": {
+            "team": top["winner"],
+            "points": top["winner_points"],
+            "rank": top["winner_rank"],
+        },
+        "biggest_blowout": {
+            "winner": biggest_blowout["winner"],
+            "loser":  biggest_blowout["loser"],
+            "margin": biggest_blowout["margin"],
+        },
+        "closest_game": {
+            "winner": closest_game["winner"],
+            "loser":  closest_game["loser"],
+            "margin": closest_game["margin"],
+        },
+        "biggest_upset": (
+            {
+                "winner":      biggest_upset["winner"],
+                "loser":       biggest_upset["loser"],
+                "winner_rank": biggest_upset["winner_rank"],
+                "loser_rank":  biggest_upset["loser_rank"],
+            }
+            if biggest_upset else None
+        ),
+    }
+
+
+def save_last_week_totals(bundle: dict, week: int):
+    """
+    Save the current cumulative standings to state/last_week_totals.json
+    so the NEXT Tribune run can compute last-week per-team scoring as
+    (current_totalPointsFor - saved_totalPointsFor). Called by main()
+    after a successful rankings write.
+    """
+    standings = bundle.get("standings") or []
+    totals_by_team = {
+        s.get("teamId"): float(s.get("totalPointsFor") or 0)
+        for s in standings if s.get("teamId")
+    }
+    state_dir = Path("state")
+    state_dir.mkdir(exist_ok=True)
+    snapshot = {
+        "week": week,
+        "saved_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+        "totals_by_team": totals_by_team,
+    }
+    (state_dir / "last_week_totals.json").write_text(json.dumps(snapshot, indent=2))
 
 
 def main():
@@ -460,6 +651,13 @@ def main():
     result = compute_rankings(bundle, cfg["weights"], generic_names=generic_names)
 
     Path(args.out).write_text(json.dumps(result, indent=2))
+    # Save cumulative standings snapshot so the NEXT run can compute
+    # last-week per-team scoring via standings delta. See
+    # _build_last_week_results() for the consumer side.
+    try:
+        save_last_week_totals(bundle, result["week"])
+    except Exception as e:
+        print(f"[power_rankings] WARNING: could not save standings snapshot: {e}", file=__import__("sys").stderr)
     print(f"[power_rankings] wrote {args.out}")
     print(f"  {len(result['rankings'])} teams ranked, week {result['week']} ({result['season_type']})")
     for r in result["rankings"]:
