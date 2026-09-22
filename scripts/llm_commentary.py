@@ -767,6 +767,40 @@ def main():
         )
     commentary = extract_json(raw)
 
+    # Retry on partial output OR extract_json failure. The model sometimes
+    # splits its JSON into two concatenated objects (extract_json merges
+    # them in best-effort but the result can still be missing fields like
+    # by_the_numbers or closing). Occasionally extract_json itself fails
+    # entirely on unbalanced/truncated output. Retrying with a slightly
+    # higher max_tokens gives the model headroom to emit a single clean
+    # object. 3 attempts max — covers most non-determinism without
+    # blowing the cron budget.
+    def _field_count(c):
+        return len([k for k in c if c.get(k)]) if isinstance(c, dict) else 0
+
+    def _needs_retry(c):
+        return _field_count(c) < 5
+
+    if _needs_retry(commentary):
+        for attempt in range(1, 3):
+            print(f"[llm_commentary] partial output ({len(commentary) if isinstance(commentary, dict) else 0} keys: {list(commentary.keys()) if isinstance(commentary, dict) else commentary}), retrying (attempt {attempt}/2)...", file=sys.stderr)
+            try:
+                raw2 = call_minimax(
+                    system=SYSTEM_PROMPT + OUTPUT_FORMAT_NOTES,
+                    user=user_prompt,
+                    model=llm_cfg.get("model", "MiniMax-M3"),
+                    base_url=llm_cfg.get("base_url", "https://api.minimax.io/anthropic/v1").rstrip("/"),
+                    api_key=os.environ["MINIMAX_API_KEY"],
+                    max_tokens=llm_cfg.get("max_tokens", 1800) + 200,
+                )
+                retry = extract_json(raw2)
+                if _field_count(retry) > _field_count(commentary):
+                    commentary = retry
+                if not _needs_retry(commentary):
+                    break
+            except Exception as ex:
+                print(f"[llm_commentary] retry {attempt} failed: {ex}", file=sys.stderr)
+
     # Validate: only `lede` is mandatory. The LLM may end_turn early
     # if it judges the body is long enough; missing optional fields
     # are gracefully suppressed by the template rather than triggering
