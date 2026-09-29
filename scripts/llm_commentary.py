@@ -203,6 +203,16 @@ HARD RULES (will be checked programmatically):
 - FATHER-LABEL RULE: do not use "dad", "father", "patriarch", "old man",
   or "the man" for any owner unless that owner is mojoh / DaMojoh. Only
   DaMojoh is a father; everyone else gets called by team name or username.
+- HEADLINE/DECK FACT-Check RULE: lede.headline and lede.deck are scanned by
+  a human reader in 2 seconds. They MUST be factually accurate against the
+  rankings and standings data you were given — no exceptions. Specifically:
+    * "X rolls to N-0" / "X stays perfect" / "X unbeaten" requires X's W-L
+      in the data to actually be N-0. If the data says 2-1, do NOT write
+      3-0. If the data says 1-2, do NOT write "undefeated".
+    * The teams you name in the headline MUST be the ones the data
+      describes. Read the rankings list carefully before writing.
+    * When in doubt, name fewer teams — "Top of the table is starting to
+      look like a two-car parade" is safer than naming the wrong record.
 - NEVER reference commissioner role in body copy (commissioner handle is
   for the byline only).
 - Bits may be referenced only when they fit naturally. NEVER name a
@@ -817,6 +827,95 @@ def main():
                     break
             except Exception as ex:
                 print(f"[llm_commentary] retry {attempt} failed: {ex}", file=sys.stderr)
+
+    # Fact-check the headline/deck against the rankings data. The model
+    # sometimes invents records ("X rolls to 3-0" when the data says 2-1)
+    # even with the prompt guard, because the prompt is a soft rule and
+    # the model is stochastic. We catch obvious contradictions here and
+    # retry once with the same prompt — the LLM usually converges on the
+    # second attempt. If the retry is also wrong, we keep the original
+    # (rather than blanking the headline) — the page is still readable,
+    # the user just gets a flagged headline.
+    def _headline_contradicts_rankings(c, rk, data_path="data.json"):
+        """Return list of (issue, detail) tuples. Empty list = no contradiction."""
+        if not isinstance(c.get("lede"), dict):
+            return []
+        rank_list = rk.get("rankings") or []
+        if not rank_list:
+            return []
+        # Build team_id -> (team_name, wins, losses) from data.json (standings)
+        # and rankings.json. rankings rows only carry team_id, not team_name.
+        try:
+            bundle = json.loads(Path(data_path).read_text())
+            standings = bundle.get("standings") or []
+        except Exception:
+            standings = []
+        team_id_to_name = {t.get("teamId"): t.get("teamName") for t in standings if t.get("teamId")}
+        records = {}  # lowercase name -> (w, l)
+        for row in rank_list:
+            tid = row.get("team_id")
+            tname = team_id_to_name.get(tid) or ""
+            if tname:
+                records[tname.lower()] = (int(row.get("wins", 0)), int(row.get("losses", 0)))
+        headline = (c["lede"].get("headline") or "").lower()
+        deck     = (c["lede"].get("deck") or "").lower()
+        text = headline + " " + deck
+        issues = []
+        import re
+        # Per-team checks: any W-L pattern OR 'undefeated'/'perfect'/'unbeaten'
+        # within 120 chars of a team name in headline/deck.
+        for tname_lc, (w, l) in records.items():
+            if tname_lc not in text:
+                continue
+            for m in re.finditer(re.escape(tname_lc), text):
+                window = text[m.end():m.end() + 120]
+                rec_match = re.search(r"(\d+)\s*[-–]\s*(\d+)", window)
+                if rec_match:
+                    nw, nl = int(rec_match.group(1)), int(rec_match.group(2))
+                    if (nw, nl) != (w, l):
+                        issues.append((tname_lc, f"headline/deck says {nw}-{nl}, data says {w}-{l}"))
+                if l > 0:
+                    for kw in ("undefeated", "unbeaten", "perfect", "still perfect", "still searching for a loss"):
+                        if kw in window.lower():
+                            issues.append((tname_lc, f"called '{kw}' but data says {w}-{l}"))
+        # Aggregate: "X teams perfect" / "X undefeateds"
+        m = re.search(r"(\d+|one|two|three|four|five)\s+(?:teams?\s+)?(?:perfect|undefeated|unbeaten)", text)
+        if m:
+            word_to_n = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+            claimed = word_to_n.get(m.group(1)) or int(m.group(1))
+            actual = sum(1 for (w, l) in records.values() if w > 0 and l == 0)
+            if claimed != actual:
+                issues.append(("headline", f"claims {claimed} perfect teams, data says {actual}"))
+        return issues
+
+    if _headline_contradicts_rankings(commentary, rankings):
+        issues = _headline_contradicts_rankings(commentary, rankings)
+        print(f"[llm_commentary] headline/deck contradicts rankings: {issues}", file=sys.stderr)
+        for attempt in range(1, 3):
+            print(f"[llm_commentary] retrying for headline fact-check (attempt {attempt}/2)...", file=sys.stderr)
+            try:
+                raw2 = call_minimax(
+                    system=SYSTEM_PROMPT + OUTPUT_FORMAT_NOTES,
+                    user=user_prompt,
+                    model=llm_cfg.get("model", "MiniMax-M3"),
+                    base_url=llm_cfg.get("base_url", "https://api.minimax.io/anthropic/v1").rstrip("/"),
+                    api_key=os.environ["MINIMAX_API_KEY"],
+                    max_tokens=llm_cfg.get("max_tokens", 1800) + 200,
+                )
+                retry = extract_json(raw2)
+                if isinstance(retry, dict) and retry.get("lede"):
+                    if not _headline_contradicts_rankings(retry, rankings):
+                        commentary = retry
+                        print(f"[llm_commentary] headline retry succeeded.", file=sys.stderr)
+                        break
+                    issues_new = _headline_contradicts_rankings(retry, rankings)
+                    if len(issues_new) < len(issues):
+                        commentary = retry
+                        issues = issues_new
+            except Exception as ex:
+                print(f"[llm_commentary] headline retry {attempt} failed: {ex}", file=sys.stderr)
+        else:
+            print(f"[llm_commentary] headline still contradicts after retries: {issues}. Keeping best-effort.", file=sys.stderr)
 
     # Validate: only `lede` is mandatory. The LLM may end_turn early
     # if it judges the body is long enough; missing optional fields
