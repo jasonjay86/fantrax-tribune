@@ -149,6 +149,50 @@ def te_premium_factor(rosters_flat: dict, team_id: str, players_index: dict) -> 
     return {0: 0.97, 1: 1.0, 2: 1.03}.get(min(te_count, 2), 1.03)
 
 
+def fantrax_strength_of_schedule(my_team_id: str, all_matchups: list,
+                                  wp_by_team: dict[str, float],
+                                  league_avg_wp: float) -> float:
+    """
+    Strength-of-schedule proxy for Fantrax.
+
+    Fantrax's `getLeagueInfo` matchup blocks don't expose per-week actual
+    scores (away.score / home.score / away.teamPoints / home.teamPoints
+    are all None even for completed weeks), so KTC-style PFpg-of-opponents
+    SoS is impossible. Use the next-best proxy: average win-percentage of
+    opponents faced so far, divided by league-average W%. Above 1.0 means
+    tougher schedule; below 1.0 means softer.
+
+    Iterates ALL periods with matchupList data (weeks 1 through current-1)
+    and collects each opponent's team_id; opponent W% comes from standings.
+
+    Returns 1.0 (neutral) when no opponents have been faced yet, or when
+    standings don't have a W% for any opponent.
+    """
+    if not all_matchups or league_avg_wp <= 0:
+        return 1.0
+    opp_wps: list[float] = []
+    for period_block in all_matchups:
+        for game in (period_block.get("matchupList") or []):
+            away = game.get("away") or {}
+            home = game.get("home") or {}
+            a_id = away.get("id")
+            h_id = home.get("id")
+            if not a_id or not h_id:
+                continue
+            # Find which side is "me" and collect the other
+            if a_id == my_team_id and h_id != my_team_id:
+                opp_id = h_id
+            elif h_id == my_team_id and a_id != my_team_id:
+                opp_id = a_id
+            else:
+                continue
+            if opp_id in wp_by_team and wp_by_team[opp_id] is not None:
+                opp_wps.append(float(wp_by_team[opp_id]))
+    if not opp_wps:
+        return 1.0
+    return (sum(opp_wps) / len(opp_wps)) / league_avg_wp
+
+
 def pick_key_players(roster: list, players_index: dict, n: int = 2,
                       starter_projections: dict[str, float] | None = None) -> list[dict]:
     """
@@ -159,7 +203,7 @@ def pick_key_players(roster: list, players_index: dict, n: int = 2,
       rank active players by projected points and take the top N. This surfaces
       the actual top scorers (e.g., a hot WR3 over a mediocre QB1) instead of
       always returning QB + RB1 by position order.
-    - Otherwise, fall back to position priority (QB → RB → WR/TE → ...) which
+    - Otherwise, fall back to position priority (QB > RB > WR/TE > ...) which
       is the previous behavior.
     """
     pos_priority = {"QB": 0, "RB": 1, "WR": 2, "TE": 3, "RWT": 4, "K": 5, "DST": 6}
@@ -305,8 +349,24 @@ def compute_rankings(bundle: dict, weights: dict,
     pf_by_team = {r["team_id"]: r["pf_per_game"] for r in enriched}
     league_avg = sum(pf_by_team.values()) / max(len(pf_by_team), 1)
 
+    # SoS source: opponent W% from standings (Fantrax API doesn't expose
+    # per-week actual scores, so we can't use PFpg-of-opponents like KTC).
+    wp_by_team = {r["team_id"]: r["win_pct"] for r in enriched}
+    league_avg_wp = sum(wp_by_team.values()) / max(len(wp_by_team), 1)
+
+    # Walk completed matchup periods for SoS. bundle["week"] is the
+    # displayed Tribune-edition week (bumped by 1 in compute_rankings
+    # above), so completed periods are strictly < bundle["week"].
+    raw = bundle.get("_raw_league_info") or {}
+    completed_matchups = [
+        m for m in (raw.get("matchups") or [])
+        if isinstance(m.get("period"), int) and m.get("period", 0) < (bundle.get("week") or 1)
+    ]
+
     for r in enriched:
-        r["sos_factor"]   = 1.0  # SoS deferred until we have at least one week of matchup data
+        r["sos_factor"]   = fantrax_strength_of_schedule(
+            r["team_id"], completed_matchups, wp_by_team, league_avg_wp
+        )
         r["all_play_pct"] = r["win_pct"]
         r["te_factor"]    = te_premium_factor(rosters_flat, r["team_id"], players_index)
 
