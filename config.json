@@ -14,10 +14,9 @@
     "personal_bits": 2
   },
   "weights": {
-    "win_pct": 0.35,
-    "pf_per_game": 0.20,
-    "strength_of_schedule": 0.20,
-    "all_play_win_pct": 0.15,
-    "te_premium": 0.10
+    "win_pct": 0.25,
+    "pf_per_game": 0.35,
+    "strength_of_schedule": 0.15,
+    "all_play_win_pct": 0.25
   }
 }
