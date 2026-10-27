@@ -836,7 +836,19 @@ def save_last_week_totals(bundle: dict, week: int):
         "saved_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
         "totals_by_team": totals_by_team,
     }
-    (state_dir / "last_week_totals.json").write_text(json.dumps(snapshot, indent=2))
+    target = state_dir / "last_week_totals.json"
+    # Only rewrite when the MEANINGFUL content changed. The snapshot is
+    # committed to git (it is the recap's fallback baseline), so a
+    # timestamp-only change would make every cron run produce a no-op
+    # commit and a pointless push.
+    try:
+        existing = json.loads(target.read_text())
+        if (existing.get("week") == snapshot["week"]
+                and existing.get("totals_by_team") == snapshot["totals_by_team"]):
+            return  # unchanged — keep the file byte-identical
+    except Exception:
+        pass
+    target.write_text(json.dumps(snapshot, indent=2))
 
 
 def main():
