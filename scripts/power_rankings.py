@@ -13,6 +13,7 @@ Usage: python power_rankings.py [--in data.json] [--out rankings.json]
 """
 import argparse
 import json
+import re
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -535,93 +536,105 @@ def compute_rankings(bundle: dict, weights: dict,
     }
 
 
+def _parse_archive_pf(path: Path) -> dict[str, float]:
+    """
+    Extract {team_name: cumulative PF} from a published Tribune edition
+    HTML. The Power Rankings table renders `PF` as a plain number per
+    team, and that number is the CUMULATIVE totalPointsFor for that
+    edition's week.
+
+    Why parse HTML instead of using the API: Fantrax's fxea endpoints
+    expose only CURRENT cumulative standings. `getStandings` IGNORES the
+    `period` query param (verified 2026-10-27: period=3, 5, and 6 all
+    return byte-identical payloads), `getLeagueInfo` matchups carry no
+    actual scores, and `getMatchups` / `getMatchupDetails` /
+    `getLeagueHistory` / `getTeamStandings` are all "Unable to find
+    method". So the published editions are the ONLY reliable record of
+    historical cumulative PF. Diffing consecutive editions yields exact
+    per-team scoring for the week between them.
+
+    Returns {} if the file is missing or has no parseable table.
+    """
+    return {name: vals["pf"] for name, vals in _parse_archive_table(path).items()}
+
+
+def _parse_archive_table(path: Path) -> dict[str, dict]:
+    """
+    Parse a published edition's Power Rankings table into
+    {team_name: {"pf": float, "rank": int, "record": str}}.
+
+    The record is needed because the "upset" determination for last
+    week's games must use the ranks as they stood BEFORE those games,
+    not the current ranks. Using current ranks flagged a 6-point win by
+    a team that has since fallen to #9 as a "biggest upset", which the
+    LLM then reported as an upset — a factual error on the page.
+    """
+    try:
+        html = path.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    out: dict[str, dict] = {}
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        cells = [
+            re.sub(r"<[^>]+>", "", c).strip()
+            for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)
+        ]
+        cells = [c for c in cells if c]
+        # Layout: [rank, team, record, PF, power]
+        if len(cells) >= 5 and cells[0].isdigit():
+            try:
+                out[cells[1]] = {
+                    "pf": float(cells[3]),
+                    "rank": int(cells[0]),
+                    "record": cells[2],
+                }
+            except ValueError:
+                continue
+    return out
+
+
 def _build_last_week_results(bundle: dict,
                               current_week: int,
                               ranked_by_id: dict) -> dict | None:
     """
-    Build a last-week recap payload from Fantrax standings delta.
+    Build a last-week recap payload for Fantrax.
 
-    Fantrax's API exposes only cumulative totalPointsFor in standings,
-    not per-week scoring. To get last-week actuals we maintain a snapshot
-    file (state/last_week_totals.json) that records each team's
-    totalPointsFor as of the previous successful Tribune run. The delta
-    between the current snapshot and the previous snapshot IS each team's
-    points scored in the last completed week.
+    PRIMARY SOURCE — published-edition PF diff (2026-10-27):
+    Fantrax's API exposes only current cumulative standings (getStandings
+    ignores ?period; getLeagueInfo matchups carry no scores), so the
+    published Tribune editions are the only reliable record of
+    historical cumulative PF. Diffing this edition's PF against the
+    PREVIOUS published edition's PF gives each team's exact scoring for
+    the week between them. That is paired with the completed period's
+    matchup list to produce winner/loser results.
 
-    Returns None when:
-      - No prior snapshot exists (first-ever run, snapshot was cleared)
-      - Current week is 1 (no prior week to recap)
-      - Bundle is missing required fields
+    FALLBACK SOURCE — state/last_week_totals.json snapshot:
+    cumulative standings snapshot written by the prior run, diffed
+    against current standings. The snapshot's `week` is the RAW bundle
+    week (NOT the displayed edition week) — see save_last_week_totals.
 
-    Returns the same shape as KTC's helper (see keep-the-change-tribune's
-    power_rankings._build_last_week_results) so the LLM commentary can
-    consume either side identically.
+    Returns None when neither source can produce a usable delta.
     """
     last_week = current_week - 1
     if last_week < 1:
         return None
 
-    state_path = Path("state") / "last_week_totals.json"
-    if not state_path.exists():
-        return None
-
-    try:
-        prior = json.loads(state_path.read_text())
-    except Exception:
-        return None
-    if not isinstance(prior, dict) or not prior.get("totals_by_team"):
-        return None
-
-    prior_totals = prior["totals_by_team"]      # team_id -> totalPointsFor (last run)
-    prior_week   = prior.get("week")            # the week number recorded
-
-    # The snapshot was saved AFTER the prior Tribune run. If the prior run
-    # was for the same week we're now processing, no games have been played
-    # in between — we can't compute a delta.
-    if prior_week is not None and prior_week >= current_week:
-        return None
-
-    # The delta between prior snapshot (cumulative through prior_week) and
-    # current cumulative reflects scoring for ALL weeks AFTER prior_week
-    # and UP TO current_week. In normal operation prior_week = current_week - 1
-    # and this delta = exactly one week's scoring — the week that's about to
-    # end (games complete, standings final). Label the recap with the just-
-    # completed week (= current_week from the bundle, since current_week is
-    # "the week we're inside" and its games are now done). If the snapshot
-    # is stale (prior_week < current_week - 1), the delta covers multiple
-    # weeks and is less precise — still useful as a "recent action" recap.
-    recap_week = current_week
-
-    # The matchup block we want is the one whose scoring the delta
-    # represents — period == current_week (the just-ended period) in the
-    # common case where prior_week = current_week - 1.
-    recap_period = current_week
-
-    # Current cumulative standings
+    # --- Current cumulative standings ---
     standings = bundle.get("standings") or []
     curr_totals = {s.get("teamId"): float(s.get("totalPointsFor") or 0)
                    for s in standings if s.get("teamId")}
-
-    if not curr_totals or not prior_totals:
+    if not curr_totals:
         return None
 
-    # Per-team last-week points = current cumulative - prior cumulative
-    last_week_points = {}
-    for tid, curr in curr_totals.items():
-        prev = float(prior_totals.get(tid, 0) or 0)
-        delta = round(curr - prev, 1)
-        if delta > 0:
-            last_week_points[tid] = delta
+    # Map team_id -> display team name (standings carry teamName).
+    name_by_id = {s.get("teamId"): s.get("teamName")
+                  for s in standings if s.get("teamId")}
 
-    if not last_week_points:
-        return None
-
-    # Pair teams via Fantrax's last-week matchup block (the schedule is
-    # already in the bundle — matchups[last_week - 1].matchupList).
+    # --- The completed period's matchups ---
     raw_matchups = bundle.get("matchups") or []
     period_block = None
     for p in raw_matchups:
-        if p.get("period") == recap_period:
+        if p.get("period") == current_week:
             period_block = p
             break
     if not period_block:
@@ -631,7 +644,62 @@ def _build_last_week_results(bundle: dict,
     def _label(tid):
         row = ranked_by_id.get(tid) or {}
         o = row.get("owner") or {}
-        return o.get("team_name") or o.get("display_name") or tid
+        return o.get("team_name") or o.get("display_name") or name_by_id.get(tid) or tid
+
+    # --- Source A: diff against the previous published edition ---
+    #
+    # EDITION NAMING: the archive files are named by the DISPLAYED edition
+    # week (raw_week + 1), not the raw week. So the edition that holds
+    # the cumulative PF as of the just-completed period (raw_week) is
+    # `week-{raw_week + 1}.html`, and the one before it is
+    # `week-{raw_week}.html`. Diffing the CURRENT standings against
+    # `week-{raw_week}.html` yields exactly one period of scoring.
+    #
+    # (Getting this wrong silently produced a TWO-period delta —
+    # 348.7 instead of 205.5 for Silence of lamb in week 7.)
+    last_week_points: dict[str, float] = {}
+    recap_week = current_week
+    # Ranks as they stood BEFORE the recap week — needed for correct
+    # upset detection. Falls back to current ranks if unavailable.
+    prior_ranks: dict[str, int] = {}
+    prev_edition = Path("editions") / f"week-{current_week}.html"
+    if prev_edition.exists():
+        prev_table = _parse_archive_table(prev_edition)
+        if prev_table:
+            for tid, curr in curr_totals.items():
+                nm = name_by_id.get(tid)
+                if nm and nm in prev_table:
+                    prior_ranks[tid] = prev_table[nm]["rank"]
+                    delta = round(curr - prev_table[nm]["pf"], 1)
+                    if delta > 0:
+                        last_week_points[tid] = delta
+
+    # --- Source B: fallback to the standings snapshot ---
+    if not last_week_points:
+        state_path = Path("state") / "last_week_totals.json"
+        if not state_path.exists():
+            return None
+        try:
+            prior = json.loads(state_path.read_text())
+        except Exception:
+            return None
+        if not isinstance(prior, dict) or not prior.get("totals_by_team"):
+            return None
+        prior_totals = prior["totals_by_team"]
+        prior_week = prior.get("week")
+        # The snapshot is from the prior run. If it's the same week we're
+        # now processing, no games have been played in between — no delta.
+        if prior_week is not None and prior_week >= current_week:
+            return None
+        for tid, curr in curr_totals.items():
+            prev = float(prior_totals.get(tid, 0) or 0)
+            delta = round(curr - prev, 1)
+            if delta > 0:
+                last_week_points[tid] = delta
+        recap_week = current_week
+
+    if not last_week_points:
+        return None
 
     results = []
     ties = []
@@ -663,8 +731,13 @@ def _build_last_week_results(bundle: dict,
             winner, loser = h_id, a_id
             winner_pts, loser_pts = h_pts, a_pts
         margin = round(winner_pts - loser_pts, 2)
-        winner_rank = (ranked_by_id.get(winner) or {}).get("rank")
-        loser_rank  = (ranked_by_id.get(loser)  or {}).get("rank")
+        # Ranks as they stood BEFORE these games were played. Using the
+        # CURRENT ranks here mislabels results: a 6-point win by a team
+        # that has since dropped to #9 was being reported as a "biggest
+        # upset" when the ranks at kickoff said it was the higher-ranked
+        # team winning.
+        winner_rank = prior_ranks.get(winner, (ranked_by_id.get(winner) or {}).get("rank"))
+        loser_rank  = prior_ranks.get(loser,  (ranked_by_id.get(loser)  or {}).get("rank"))
         was_upset = (isinstance(winner_rank, int)
                      and isinstance(loser_rank, int)
                      and winner_rank > loser_rank)
@@ -742,6 +815,14 @@ def save_last_week_totals(bundle: dict, week: int):
     so the NEXT Tribune run can compute last-week per-team scoring as
     (current_totalPointsFor - saved_totalPointsFor). Called by main()
     after a successful rankings write.
+
+    IMPORTANT (2026-10-27): `week` MUST be the RAW bundle week
+    (current_week(bundle)), NOT the displayed edition week (raw + 1).
+    The consumer side (_build_last_week_results) compares the snapshot's
+    week against current_week(bundle). Storing the bumped week made the
+    guard `prior_week >= current_week` always true (8 >= 7), so the
+    recap was permanently None and Fantrax never showed a last-week
+    recap while KTC did.
     """
     standings = bundle.get("standings") or []
     totals_by_team = {
@@ -775,19 +856,18 @@ def main():
     # last-week per-team scoring via standings delta. See
     # _build_last_week_results() for the consumer side.
     #
-    # Skip the save when the existing snapshot is older than the previous
-    # week — that's a sign of bootstrap debt (a synthetic snapshot was
-    # planted to seed the recap for THIS run; overwriting it would lose
-    # that seed before the natural next-run cycle can fix things). The
-    # next cron after a clean baseline will save normally.
+    # The snapshot's week MUST be the RAW bundle week (current_week(bundle)),
+    # not result["week"] (which is raw+1, the displayed edition label).
+    # Mismatching them made the consumer's `prior_week >= current_week`
+    # guard always true, which permanently disabled the Fantrax recap.
+    raw_week = current_week(bundle)
     state_path = Path("state") / "last_week_totals.json"
     should_save = True
     if state_path.exists():
         try:
             prior = json.loads(state_path.read_text())
-            current_week = result.get("week") or 0
             prior_week = prior.get("week") or 0
-            if prior_week < current_week - 1:
+            if prior_week < raw_week - 1:
                 # Snapshot represents an earlier week than last week — likely
                 # a synthetic bootstrap; don't clobber until natural reseed.
                 should_save = False
@@ -797,7 +877,7 @@ def main():
             pass
     if should_save:
         try:
-            save_last_week_totals(bundle, result["week"])
+            save_last_week_totals(bundle, raw_week)
         except Exception as e:
             print(f"[power_rankings] WARNING: could not save standings snapshot: {e}", file=__import__("sys").stderr)
     print(f"[power_rankings] wrote {args.out}")
