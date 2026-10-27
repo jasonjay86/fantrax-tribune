@@ -127,6 +127,14 @@ LEDE — RECAP LAST WEEK, NOT THIS WEEK'S PREVIEW:
   not yet saved), recap the standings shape instead ("three teams at
   2-0, four at 0-2, here's what that means"). Do NOT default to
   previewing the MOTW.
+- TIES ARE RESULTS — never omit them. If last_week_results contains a
+  "ties" array, every entry in it MUST be mentioned. A tied game is a
+  real outcome, and it is often the most interesting thing that
+  happened (2026-10-27, KTC Week 7: the #1 team and the #12 team tied
+  at 120.88 each). Refer to the teams by their team_a/team_b names and
+  the shared points value. Do NOT invent a winner for a tied game and
+  do NOT call one side the "loser". A tie between the #1 and #12 teams
+  is a marquee result — lean into it.
 
 BY THE NUMBERS — MAKE THESE VARIES WEEK-TO-WEEK:
 - These boxes sit at the BOTTOM of the page and are the second thing
@@ -135,6 +143,8 @@ BY THE NUMBERS — MAKE THESE VARIES WEEK-TO-WEEK:
 - Pull from this week's actual data. Good sources (in rough priority order):
     * Last-week recap numbers (top scorer, biggest blowout margin,
       closest-game margin, biggest-upset margin)
+    * Tied games from last_week_results["ties"] — a "Tied Game" or
+      "Tied At" box is a great fresh stat when one happened
     * League scoring quirks (1st-down rush bonus, 50+ yd completion bonus,
       50+ yd passing TD bonus, TE premium per reception)
     * Standings shape (teams tied at the top, longest losing streak,
@@ -661,6 +671,23 @@ def build_dynamic_stub(rankings: dict) -> dict | None:
     second_team = _team_label(second) if second else None
     second_power = round((second or {}).get("power_score") or 0, 1) if second else None
 
+    # Ties from last week's recap — a real game outcome, not a non-event.
+    # Same fix as KTC (2026-10-27): don't drop them silently.
+    last_week = rankings.get("last_week_results") or {}
+    ties = last_week.get("ties") or []
+    tie_sentence = ""
+    tie_boxes = []
+    for t in ties:
+        tie_sentence += (
+            f" And hold on — #{t.get('team_a_rank')} {t.get('team_a')} and "
+            f"#{t.get('team_b_rank')} {t.get('team_b')} tied it up at "
+            f"{t.get('points')} apiece. Dead heat."
+        )
+        tie_boxes.append({
+            "value": str(t.get("points")),
+            "label": f"Tied Game: #{t.get('team_a_rank')} v #{t.get('team_b_rank')}",
+        })
+
     # --- Lede ---
     headline = f"BOOM — Week {week}, and {top_team}'s on top"
     deck = (
@@ -675,7 +702,7 @@ def build_dynamic_stub(rankings: dict) -> dict | None:
             f"{second_team} is right behind at #2 with a {second_power} "
             f"Power score, so don't get comfortable up there. "
             f"Bottom of the page: {bottom_team}, {bottom_record}, "
-            f"{bottom_pf} points. Bang-bang. Let's get into it."
+            f"{bottom_pf} points.{tie_sentence} Bang-bang. Let's get into it."
         )
     else:
         body = (
@@ -731,6 +758,10 @@ def build_dynamic_stub(rankings: dict) -> dict | None:
         {"value": str(len(rs)),    "label": "Teams in the Hunt"},
         {"value": str(week),       "label": "Week Number"},
     ]
+    # A tied game is a fresher stat than the placeholder "Week Number" —
+    # swap it in when one happened.
+    if tie_boxes:
+        by_the_numbers[3] = tie_boxes[0]
 
     # --- Closing ---
     closing = (

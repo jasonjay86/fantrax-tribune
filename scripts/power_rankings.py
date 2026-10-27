@@ -634,6 +634,7 @@ def _build_last_week_results(bundle: dict,
         return o.get("team_name") or o.get("display_name") or tid
 
     results = []
+    ties = []
     for m in matchup_list:
         a_id = m.get("away", {}).get("id")
         h_id = m.get("home", {}).get("id")
@@ -641,7 +642,19 @@ def _build_last_week_results(bundle: dict,
         h_pts = last_week_points.get(h_id)
         if a_pts is None or h_pts is None:
             continue
+        # Ties are a real game outcome, not a non-event. Dropping them
+        # made both teams vanish from the recap entirely (neither
+        # winner nor loser) and hid the result from the page.
+        # 2026-10-27: same fix shipped to KTC Week 7, where the #1 and
+        # #12 teams tied at 120.88 each.
         if a_pts == h_pts:
+            ties.append({
+                "team_a": _label(a_id),
+                "team_b": _label(h_id),
+                "points": round(a_pts, 1),
+                "team_a_rank": (ranked_by_id.get(a_id) or {}).get("rank"),
+                "team_b_rank": (ranked_by_id.get(h_id) or {}).get("rank"),
+            })
             continue
         if a_pts > h_pts:
             winner, loser = a_id, h_id
@@ -666,12 +679,13 @@ def _build_last_week_results(bundle: dict,
             "was_upset": was_upset,
         })
 
-    if not results:
+    if not results and not ties:
         return None
 
-    top = max(results, key=lambda r: r["winner_points"])
-    biggest_blowout = max(results, key=lambda r: r["margin"])
-    closest_game   = min(results, key=lambda r: r["margin"])
+    top = max(results, key=lambda r: r["winner_points"]) if results else None
+    # A week where every game was tied has no blowout/closest/upsert.
+    biggest_blowout = max(results, key=lambda r: r["margin"]) if results else None
+    closest_game   = min(results, key=lambda r: r["margin"]) if results else None
     upsets = [r for r in results if r["was_upset"]]
     biggest_upset = None
     if upsets:
@@ -683,21 +697,33 @@ def _build_last_week_results(bundle: dict,
     return {
         "week": recap_week,
         "results": results,
-        "top_scorer": {
-            "team": top["winner"],
-            "points": top["winner_points"],
-            "rank": top["winner_rank"],
-        },
-        "biggest_blowout": {
-            "winner": biggest_blowout["winner"],
-            "loser":  biggest_blowout["loser"],
-            "margin": biggest_blowout["margin"],
-        },
-        "closest_game": {
-            "winner": closest_game["winner"],
-            "loser":  closest_game["loser"],
-            "margin": closest_game["margin"],
-        },
+        # Ties are surfaced separately — they have no winner/loser, so
+        # folding them into `results` would misreport the outcome.
+        "ties": ties,
+        "top_scorer": (
+            {
+                "team": top["winner"],
+                "points": top["winner_points"],
+                "rank": top["winner_rank"],
+            }
+            if top else None
+        ),
+        "biggest_blowout": (
+            {
+                "winner": biggest_blowout["winner"],
+                "loser":  biggest_blowout["loser"],
+                "margin": biggest_blowout["margin"],
+            }
+            if biggest_blowout else None
+        ),
+        "closest_game": (
+            {
+                "winner": closest_game["winner"],
+                "loser":  closest_game["loser"],
+                "margin": closest_game["margin"],
+            }
+            if closest_game else None
+        ),
         "biggest_upset": (
             {
                 "winner":      biggest_upset["winner"],
