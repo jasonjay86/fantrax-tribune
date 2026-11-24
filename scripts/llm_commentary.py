@@ -557,52 +557,91 @@ def extract_json(text: str) -> dict:
     return primary
 
 
-def call_minimax(system: str, user: str, model: str, base_url: str, api_key: str, max_tokens: int = 1800) -> str:
-    """
-    MiniMax Anthropic-compatible Messages API.
+def _api_key(base_url: str, model: str = "") -> str:
+    """Pick the credential that matches the endpoint."""
+    if "deepseek" in base_url.lower() or model.lower().startswith("deepseek"):
+        return os.environ.get("DEEPSEEK_API_KEY", "")
+    return os.environ.get("MINIMAX_API_KEY", "")
 
-    Endpoint: {base_url}/messages  (NOT /chat/completions)
-    Auth: Authorization: Bearer <key>
-    Body: messages use content-blocks [{type:"text", text:"..."}],
-          system is a top-level string field, NOT a message.
-    Response: content is an array of blocks; text comes from the block
-              where type == "text".
+
+def call_model(system: str, user: str, model: str, base_url: str, api_key: str,
+               max_tokens: int = 1800) -> str:
     """
-    body = json.dumps({
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": 0.85,
-        "system": system,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": user}]}],
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{base_url.rstrip('/')}/messages",
-        data=body,
-        headers={
+    Provider-aware completion call. Two shapes are supported:
+
+    * Anthropic-compatible Messages API (MiniMax) — {base_url}/messages,
+      top-level `system`, block-style message content, response.content[].text.
+    * OpenAI-compatible Chat Completions (DeepSeek and anything else) —
+      {base_url}/chat/completions, system as a message, response.choices[0].
+      message.content.
+
+    DeepSeek-flash is a reasoning model: it spends completion tokens thinking
+    before it writes, so it needs a generous max_tokens or content comes back
+    empty while finish_reason is still "stop".
+    """
+    base = base_url.rstrip("/")
+    anthropic_style = "/anthropic" in base or base.endswith("/messages")
+
+    if anthropic_style:
+        body = json.dumps({
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": 0.85,
+            "system": system,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": user}]}],
+        }).encode("utf-8")
+        url = f"{base}/messages"
+        headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
             "anthropic-version": "2023-06-01",
-        },
-    )
+        }
+    else:
+        budget = max_tokens + 1500 if model.lower().startswith("deepseek") else max_tokens
+        body = json.dumps({
+            "model": model,
+            "max_tokens": budget,
+            "temperature": 0.85,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }).encode("utf-8")
+        url = f"{base}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+    req = urllib.request.Request(url, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             resp = json.loads(r.read())
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
         print(f"[llm_commentary] HTTP {e.code} from {req.full_url}: {err_body[:500]}", file=sys.stderr)
         raise
 
-    blocks = resp.get("content") or []
-    text_chunks = [b.get("text", "") for b in blocks if b.get("type") == "text"]
-    content = "".join(text_chunks).strip()
-    # Diagnostic: log stop_reason + usage so we can debug truncation
-    sr = resp.get("stop_reason")
+    if anthropic_style:
+        blocks = resp.get("content") or []
+        content = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+        stop_reason = resp.get("stop_reason")
+    else:
+        choice = (resp.get("choices") or [{}])[0]
+        content = ((choice.get("message") or {}).get("content") or "").strip()
+        stop_reason = choice.get("finish_reason")
+
     usage = resp.get("usage", {})
-    print(f"[llm_commentary] stop_reason={sr}  usage={usage}  content_len={len(content)}", file=sys.stderr)
+    print(f"[llm_commentary] model={model} stop_reason={stop_reason}  usage={usage}  "
+          f"content_len={len(content)}", file=sys.stderr)
     if not content:
         print(f"[llm_commentary] empty content. Full response: {json.dumps(resp)[:500]}", file=sys.stderr)
         raise SystemExit("[llm_commentary] empty content")
     return content
+
+
+# Backwards-compatible alias — older call sites and notes refer to call_minimax.
+call_minimax = call_model
 
 
 STUB_FALLBACK = {
@@ -801,7 +840,8 @@ def main():
         print(f"[llm_commentary] picked {len(chosen_bits)} personal bit(s) — about: {handles}", file=sys.stderr)
     user_prompt = build_user_prompt(rankings, cfg, context, personal_bits=chosen_bits)
 
-    if args.dry_run or not os.environ.get("MINIMAX_API_KEY"):
+    llm_key = _api_key(llm_cfg.get("base_url", ""), llm_cfg.get("model", ""))
+    if args.dry_run or not llm_key:
             # Dynamic stub first: build a real-data stub from rankings.json so
             # the page reads current state instead of frozen preseason lines.
             # STUB_FALLBACK only fires if the dynamic builder can't read the
@@ -812,15 +852,16 @@ def main():
             if not isinstance(stub.get("pick"), dict) or not stub["pick"].get("favorite") or stub["pick"]["favorite"] == "—":
                 stub["pick"] = _fallback_pick(rankings, stub) or stub.get("pick", STUB_FALLBACK["pick"])
             Path(args.out).write_text(json.dumps(stub, indent=2))
-            print(f"[llm_commentary] wrote {args.out} (stub, no API key) — pick filled from projections")
+            print(f"[llm_commentary] wrote {args.out} (stub, no API key for "
+                  f"{llm_cfg.get('model')}) — pick filled from projections")
             return
 
-    raw = call_minimax(
+    raw = call_model(
             system=SYSTEM_PROMPT + OUTPUT_FORMAT_NOTES,
             user=user_prompt,
-            model=llm_cfg.get("model", "MiniMax-M3"),
-            base_url=llm_cfg.get("base_url", "https://api.minimax.io/anthropic/v1").rstrip("/"),
-            api_key=os.environ["MINIMAX_API_KEY"],
+            model=llm_cfg.get("model", "deepseek-flash"),
+            base_url=llm_cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/"),
+            api_key=llm_key,
             max_tokens=llm_cfg.get("max_tokens", 1800),
         )
     commentary = extract_json(raw)
@@ -843,12 +884,12 @@ def main():
         for attempt in range(1, 3):
             print(f"[llm_commentary] partial output ({len(commentary) if isinstance(commentary, dict) else 0} keys: {list(commentary.keys()) if isinstance(commentary, dict) else commentary}), retrying (attempt {attempt}/2)...", file=sys.stderr)
             try:
-                raw2 = call_minimax(
+                raw2 = call_model(
                     system=SYSTEM_PROMPT + OUTPUT_FORMAT_NOTES,
                     user=user_prompt,
-                    model=llm_cfg.get("model", "MiniMax-M3"),
-                    base_url=llm_cfg.get("base_url", "https://api.minimax.io/anthropic/v1").rstrip("/"),
-                    api_key=os.environ["MINIMAX_API_KEY"],
+                    model=llm_cfg.get("model", "deepseek-flash"),
+                    base_url=llm_cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/"),
+                    api_key=llm_key,
                     max_tokens=llm_cfg.get("max_tokens", 1800) + 200,
                 )
                 retry = extract_json(raw2)
@@ -925,12 +966,12 @@ def main():
         for attempt in range(1, 3):
             print(f"[llm_commentary] retrying for headline fact-check (attempt {attempt}/2)...", file=sys.stderr)
             try:
-                raw2 = call_minimax(
+                raw2 = call_model(
                     system=SYSTEM_PROMPT + OUTPUT_FORMAT_NOTES,
                     user=user_prompt,
-                    model=llm_cfg.get("model", "MiniMax-M3"),
-                    base_url=llm_cfg.get("base_url", "https://api.minimax.io/anthropic/v1").rstrip("/"),
-                    api_key=os.environ["MINIMAX_API_KEY"],
+                    model=llm_cfg.get("model", "deepseek-flash"),
+                    base_url=llm_cfg.get("base_url", "https://api.deepseek.com/v1").rstrip("/"),
+                    api_key=llm_key,
                     max_tokens=llm_cfg.get("max_tokens", 1800) + 200,
                 )
                 retry = extract_json(raw2)
